@@ -9,8 +9,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PackageKit\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-10-02 21:53+0200\n"
-"PO-Revision-Date: 2025-10-04 09:16+0000\n"
+"POT-Creation-Date: 2025-11-23 06:24+0100\n"
+"PO-Revision-Date: 2025-11-23 22:51+0000\n"
 "Last-Translator: Yuri Chornoivan <yurchor@ukr.net>\n"
 "Language-Team: Ukrainian <https://hosted.weblate.org/projects/packagekit/translations/uk/>\n"
 "Language: uk\n"
@@ -18,7 +18,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=4; plural=(n % 1 == 0 && n % 10 == 1 && n % 100 != 11 ? 0 : n % 1 == 0 && n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 1 : n % 1 == 0 && (n % 10 ==0 || (n % 10 >=5 && n % 10 <=9) || (n % 100 >=11 && n % 100 <=14 )) ? 2: 3);\n"
-"X-Generator: Weblate 5.14-dev\n"
+"X-Generator: Weblate 5.15-dev\n"
 
 #: backends/dnf/pk-backend-dnf-refresh.c:140 src/pk-main.c:168
 msgid "Config file was not found."
@@ -30,119 +30,992 @@ msgstr "Файл налаштувань не знайдено."
 msgid "Failed to load config file: %s"
 msgstr "Не вдалося завантажити файл налаштувань: %s"
 
+#. TRANSLATORS: This is when the daemon crashed, and we are up
+#. * shit creek without a paddle
+#: client/pkgc-context.c:123 client/pkcon/pk-console.c:1440
+msgid "The daemon crashed mid-transaction!"
+msgstr "Аварійне завершення фонової служби під час операції!"
+
+#. TRANSLATORS: command line argument, do we just download or apply changes
+#. command line argument, do we just download or apply changes
+#: client/pkgc-manage.c:40 client/pkcon/pk-console.c:1715
+msgid "Prepare the transaction by downloading packages only"
+msgstr "Приготуватися до операції, лише отримати пакунки"
+
+#. TRANSLATORS: command line argument, do we allow package downgrades
+#: client/pkgc-manage.c:47
+msgid "Allow package downgrades"
+msgstr "Дозволити знижувати версії пакунків"
+
+#. TRANSLATORS: command line argument, do we allow package re-installations
+#: client/pkgc-manage.c:54
+msgid "Allow package re-installations"
+msgstr "Дозволити повторне встановлення пакунків"
+
+#. TRANSLATORS: command line argument
+#: client/pkgc-manage.c:61
+msgid "Allow installation of untrusted packages"
+msgstr "Дозволитии встановлення пакунків без довіри"
+
+#. TRANSLATORS: command line argument
+#: client/pkgc-manage.c:68 client/pkcon/pk-console.c:1722
+msgid "Automatically remove unused dependencies"
+msgstr "Автоматично вилучати невикористані залежності"
+
+#. TRANSLATORS: command line argument
+#: client/pkgc-manage.c:75
+msgid "Maximum metadata cache age in seconds"
+msgstr "Максимальний вік метаданих у кеші у секундах"
+
+#: client/pkgc-manage.c:75
+msgid "SECONDS"
+msgstr "СЕКУНДИ"
+
+#. TRANSLATORS: Description for pkgctl refresh
+#: client/pkgc-manage.c:195
+msgid "Refresh the package metadata cache."
+msgstr "Освіжити кеш метаданих пакунків."
+
+#: client/pkgc-manage.c:221
+msgid "Package metadata refreshed"
+msgstr "Метадані пакунків оновлено"
+
+#. TRANSLATORS: Description for pkgctl install
+#: client/pkgc-manage.c:245
+msgid "Install one or more packages or local package files."
+msgstr "Встановити один або декілька пакунків або локальних файлів пакунків."
+
+#: client/pkgc-manage.c:301 client/pkgc-manage.c:360 client/pkgc-manage.c:415
+#: client/pkgc-query.c:436
+#, c-format
+msgid "Could not find packages: %s"
+msgstr "Не вдалося знайти пакунки: %s"
+
+#. TRANSLATORS: Description for pkgctl remove
+#: client/pkgc-manage.c:337
+msgid "Remove one or more packages from the system."
+msgstr "Вилучити один або декілька пакунків з системи."
+
+#. TRANSLATORS: Description for pkgctl download
+#: client/pkgc-manage.c:401
+msgid "Download packages to the specified directory without installing."
+msgstr "Отримати пакунки до вказаного каталогу без встановлення."
+
+#: client/pkgc-manage.c:423
+#, c-format
+msgid "Directory does not exist: %s"
+msgstr "Каталогу не існує: %s"
+
+#. TRANSLATORS: Description for pkgctl update
+#: client/pkgc-manage.c:459
+msgid "Update all packages or specific packages to their latest versions."
+msgstr "Оновити усі пакунки або вказані пакунки до найсвіжіших версій."
+
+#: client/pkgc-manage.c:496 client/pkgc-manage.c:595 client/pkgc-manage.c:821
+#, c-format
+msgid "Failed to get updates: %s"
+msgstr "Не вдалося отримати оновлення: %s"
+
+#: client/pkgc-manage.c:505 client/pkgc-manage.c:604 client/pkgc-manage.c:829
+msgid "No packages require updating"
+msgstr "Жоден з пакунків не потребує оновлення"
+
+#. TRANSLATORS: Description of pkgctl upgrade.
+#. * No not translate "minimal, default, complete", those are parameters
+#: client/pkgc-manage.c:544
+msgid ""
+"Upgrade all packages or perform a distribution upgrade.\n"
+"\n"
+"Types: minimal, default, complete"
+msgstr ""
+"Оновити усі пакунки або виконати оновлення дистрибутива.\n"
+"\n"
+"Типи: minimal, default, complete"
+
+#: client/pkgc-manage.c:640
+#, c-format
+msgid "Failed to read offline update action: %s"
+msgstr "Не вдалося прочитати дію з автономного оновлення: %s"
+
+#: client/pkgc-manage.c:650
+msgid "Offline update is not triggered."
+msgstr "Автономне оновлення не активовано."
+
+#: client/pkgc-manage.c:658
+#, c-format
+msgid "Offline update is triggered. Action after update: %s"
+msgstr "Активовано автономне оновлення. Дія після оновлення: %s"
+
+#. TRANSLATORS: Packages that were prepared for an offline update
+#: client/pkgc-manage.c:669
+msgid "Prepared packages:"
+msgstr "Приготовані пакунки:"
+
+#: client/pkgc-manage.c:683
+msgid "No offline update is prepared."
+msgstr "Не приготовано жодного автономного оновлення."
+
+#: client/pkgc-manage.c:685
+#, c-format
+msgid "Failed to read prepared offline updates: %s"
+msgstr "Не вдалося прочитати приготовані автономні оновлення: %s"
+
+#: client/pkgc-manage.c:695
+msgid "No results from last offline update available."
+msgstr "Немає результатів від останнього доступного автономного оновлення."
+
+#: client/pkgc-manage.c:702
+#, c-format
+msgid "Last offline update failed: %s: %s"
+msgstr "Остання помилка автономного оновлення: %s: %s"
+
+#: client/pkgc-manage.c:709
+msgid "Last offline update completed successfully"
+msgstr "Останніє автономне оновлення завершено успішно"
+
+#: client/pkgc-manage.c:720
+#, c-format
+msgid "Updated: %s"
+msgstr "Оновлено: %s"
+
+#: client/pkgc-manage.c:741
+#, c-format
+msgid "Failed to trigger offline update: %s"
+msgstr "Не вдалося активувати автономне оновлення: %s"
+
+#: client/pkgc-manage.c:745
+msgid "Offline update scheduled. System will update on next reboot."
+msgstr "Заплановане автономне оновлення. Систему буде оновлено під час наступного перезавантаження."
+
+#. TRANSLATORS: Description of the pkgctl offline-update command.
+#. * The request values (trigger, prepare, etc.) are parameters and MUST NOT be translated.
+#: client/pkgc-manage.c:765
+msgid ""
+"Trigger & manage offline system updates.\n"
+"\n"
+"You can select one of these requests:\n"
+"  prepare - prepare an offline update and trigger it (default)\n"
+"  trigger - trigger a (manually prepared) offline update\n"
+"  cancel  - cancel a planned offline update\n"
+"  status  - show status information about a prepared or finished offline update"
+msgstr ""
+"Увімкнути автономні оновлення системи і керувати ними.\n"
+"\n"
+"Ви можете вибрати один з таких запитів:\n"
+"  prepare - приготувати автономне оновлення і увімкнути його (типовий варіант)\n"
+"  trigger - увімкнути (приготоване вручну) автономне оновлення\n"
+"  cancel  - скасувати заплановане автномне оновлення\n"
+"  status  - показати відомості щодо стану щодо приготованого або завершеного автономного оновлення"
+
+#: client/pkgc-manage.c:789
+#, c-format
+msgid "Failed to cancel offline update: %s"
+msgstr "Не вдалося скасувати автономне оновлення: %s"
+
+#: client/pkgc-manage.c:793
+msgid "Offline update cancelled"
+msgstr "Автономне оновлення скасовано"
+
+#: client/pkgc-manage.c:845
+#, c-format
+msgid "Unknown offline-update request: %s"
+msgstr "Невідомий запит щодо автономного оновлення: %s"
+
+#. TRANSLATORS: Description for pkgctl install-sig
+#: client/pkgc-manage.c:865
+msgid "Install a package signature for GPG verification."
+msgstr "Встановити підпис пакунка для перевірки за допомогою GPG."
+
+#. TRANSLATORS: Description for pkgctl repair
+#: client/pkgc-manage.c:900
+msgid "Attempt to repair the package management system."
+msgstr "Спробувати полагодити систему керування пакунками."
+
+#: client/pkgc-manage.c:916
+msgid "System repaired successfully"
+msgstr "Систему успішно полагоджено"
+
+#. TRANSLATORS: Description for pkgctl quit
+#: client/pkgc-manage.c:937
+msgid "Safely terminate the PackageKit daemon."
+msgstr "Безпечно перервати роботу фонової служби PackageKit."
+
+#: client/pkgc-manage.c:943
+#, c-format
+msgid "Failed to send daemon quit request: %s"
+msgstr "Не вдалося надіслати запит щодо завершення роботи фонової служби: %s"
+
+#: client/pkgc-manage.c:962
+msgid "Refresh package metadata"
+msgstr "Освіжити метадані пакунків"
+
+#: client/pkgc-manage.c:968
+msgid "Install packages"
+msgstr "Встановити пакунки"
+
+#: client/pkgc-manage.c:974
+msgid "Remove packages"
+msgstr "Вилучити пакунки"
+
+#: client/pkgc-manage.c:980
+msgid "Update packages"
+msgstr "Оновити пакунки"
+
+#: client/pkgc-manage.c:986
+msgid "Upgrade the system"
+msgstr "Оновити систему"
+
+#: client/pkgc-manage.c:992
+msgid "Download packages"
+msgstr "Отримати пакунки"
+
+#: client/pkgc-manage.c:998
+msgid "Manage offline system updates"
+msgstr "Керування автономними оновленнями системи"
+
+#: client/pkgc-manage.c:1004
+msgid "Install package signature"
+msgstr "Встановити підпис пакунка"
+
+#: client/pkgc-manage.c:1010
+msgid "Repair package system"
+msgstr "Полагодити систему пакунків"
+
+#: client/pkgc-manage.c:1016
+msgid "Safely stop the PackageKit daemon"
+msgstr "Безпечно зупинити роботу фонової служби PackageKit"
+
+#: client/pkgc-monitor.c:381 client/pkcon/pk-monitor.c:267
+msgid "Failed to get daemon state"
+msgstr "Спроба визначення стану фонової служби завершилася невдало"
+
+#: client/pkgc-monitor.c:439 client/pkcon/pk-monitor.c:310
+msgid "Failed to get properties"
+msgstr "Не вдалося звантажити дані щодо властивостей"
+
+#. TRANSLATORS: Description for pkgctl monitor
+#: client/pkgc-monitor.c:460
+msgid "Monitor PackageKit D-Bus events"
+msgstr "Стежити за подіями D-Bus PackageKit"
+
+#. TRANSLATORS: Summary for pkgctl monitor, the PK D-Bus monitor
+#: client/pkgc-monitor.c:562
+msgid "Monitor PackageKit bus events"
+msgstr "Стежити за подіями шини PackageKit"
+
+#. TRANSLATORS: Description for pkgctl backend
+#: client/pkgc-query.c:166
+msgid "Show PackageKit backend information."
+msgstr "Показати відомості щодо фонової служби PackageKit."
+
+#: client/pkgc-query.c:211
+#, c-format
+msgid "Backend: %s"
+msgstr "Модуль: %s"
+
+#: client/pkgc-query.c:214
+#, c-format
+msgid "Description: %s"
+msgstr "Опис: %s"
+
+#: client/pkgc-query.c:217
+#, c-format
+msgid "Author: %s"
+msgstr "Автор: %s"
+
+#. add some extra space before the potentially long roles list
+#. TRANSLATORS: List of backend-roles
+#: client/pkgc-query.c:222
+#, c-format
+msgid "Roles: %s"
+msgstr "Ролі: %s"
+
+#. TRANSLATORS: Description for pkgctl history
+#: client/pkgc-query.c:245
+msgid "Show recent package management transactions."
+msgstr "Показати нещодавні операції щодо керування пакунками."
+
+#. TRANSLATORS: Description of the pkgctl search command. MODE values must not be translated!
+#: client/pkgc-query.c:284
+msgid ""
+"Search for packages matching the given patterns. If MODE is not specified, \n"
+"'details' search is performed.\n"
+"Possible search MODEs are:\n"
+"  name    - search by package name\n"
+"  details - search by package details (default)\n"
+"  file    - search by file name\n"
+"  group   - search by package group"
+msgstr ""
+"Шукати пакунки, які відповідають заданим взірцям. Якщо РЕЖИМ не вказано, \n"
+"буде виконано пошук «details».\n"
+"Можливі РЕЖИМи пошуку:\n"
+"  name    - шукати пакунок за назвою\n"
+"  details - шукати пакунок за подробицями (типовий варіант)\n"
+"  file    - шукати за назвою файла\n"
+"  group   - шукати пакунок за групою"
+
+#: client/pkgc-query.c:311
+msgid "No search pattern specified"
+msgstr "Не вказано взірця для пошуку"
+
+#. TRANSLATORS: Description for pkgctl list
+#: client/pkgc-query.c:371
+msgid "List all packages or those matching a pattern."
+msgstr "Вивести список усіх пакунків або пакунків, які відповідають взірцю."
+
+#. TRANSLATORS: Description for pkgctl show
+#: client/pkgc-query.c:415
+msgid "Show information about one or more packages."
+msgstr "Показати відомості щодо одного або декількох пакунків."
+
+#: client/pkgc-query.c:471 client/pkgc-query.c:749
+msgid "Check dependencies recursively"
+msgstr "Перевіряти залежності рекурсивно"
+
+#. TRANSLATORS: Description for pkgctl depends-on
+#: client/pkgc-query.c:480
+msgid "Show dependencies for one or more packages."
+msgstr "Показати залежності для одного або декількох пакунків."
+
+#: client/pkgc-query.c:488 client/pkgc-query.c:570 client/pkgc-query.c:684
+#: client/pkgc-query.c:766
+#, c-format
+msgid "Could not resolve packages: %s"
+msgstr "Не вдалося розв'язати залежності пакунків: %s"
+
+#. TRANSLATORS: Description for pkgctl what-provides
+#: client/pkgc-query.c:520
+msgid "Show which packages provide the specified capability."
+msgstr "Показати, які пакунки надають вказану можливість."
+
+#. TRANSLATORS: Description for pkgctl files
+#: client/pkgc-query.c:551
+msgid "List all files contained in one or more packages."
+msgstr "Вивести список усіх файлів, які містяться в одному або декількох пакунках."
+
+#. TRANSLATORS: Description for pkgctl list-updates
+#: client/pkgc-query.c:646
+msgid "List all currently available package updates."
+msgstr "Вивести список усіх поточних доступних оновлень пакунків."
+
+#. TRANSLATORS: Description for pkgctl show-update
+#: client/pkgc-query.c:678
+msgid "Show detailed information about the specified package update."
+msgstr "Показати докладні відомості щодо вказаного оновлення пакунка."
+
+#. TRANSLATORS: Description for pkgctl resolve
+#: client/pkgc-query.c:715
+msgid "Resolve package names to package IDs."
+msgstr "Визначити за назвами пакунків ідентифікатори пакунків."
+
+#. TRANSLATORS: Description for pkgctl required-by
+#: client/pkgc-query.c:758
+msgid "Show which packages require the specified packages."
+msgstr "Показати, які пакунки потребують вказаних пакунків."
+
+#. TRANSLATORS: Description for pkgctl organization
+#: client/pkgc-query.c:800
+msgid "List all available filters, groups and categories for package organization."
+msgstr "Вивести список усіх доступних фільтрів, груп і категорій для упорядковування пакунків."
+
+#. TRANSLATORS: Header for list of available package filters
+#: client/pkgc-query.c:808
+msgid "Filters:"
+msgstr "Фільтри:"
+
+#. TRANSLATORS: Header for list of available package groups
+#: client/pkgc-query.c:823
+msgid "Groups:"
+msgstr "Групи:"
+
+#. TRANSLATORS: Header for list of available package categories
+#: client/pkgc-query.c:838
+msgid "Categories:"
+msgstr "Категорії:"
+
+#. TRANSLATORS: Description for pkgctl show-distro-upgrade
+#: client/pkgc-query.c:864
+msgid "Show distribution version upgrades, if any are available."
+msgstr "Показати оновлення версій дистрибутива, якщо такі доступні."
+
+#. TRANSLATORS: we keep a database updated with the time that an
+#. * action was last executed
+#: client/pkgc-query.c:895 client/pkcon/pk-console.c:1572
+msgid "Failed to get the time since this action was last completed"
+msgstr "Не вдалося визначити час, коли цю дію було виконано востаннє"
+
+#. TRANSLATORS: this is the time since this role was used
+#: client/pkgc-query.c:908
+msgid "Elapsed time"
+msgstr "Витрачений час"
+
+#. TRANSLATORS: Description for pkgctl last-time
+#: client/pkgc-query.c:932
+msgid "Get time in seconds since the last specified action."
+msgstr "Отримати час у секундах з останньої вказаної дії."
+
+#. TRANSLATORS: The user didn't specify what action to use
+#. TRANSLATORS: The user didn't
+#. * specify what action to use
+#: client/pkgc-query.c:942 client/pkcon/pk-console.c:2161
+msgid "An action, e.g. 'update-packages' is required"
+msgstr "Слід вказати дію, наприклад «update-packages»"
+
+#. TRANSLATORS: The user specified an invalid action
+#. TRANSLATORS: The user specified
+#. * an invalid action
+#: client/pkgc-query.c:949 client/pkcon/pk-console.c:2171
+msgid "A correct role is required"
+msgstr "Слід вказати належну роль"
+
+#: client/pkgc-query.c:971
+msgid "Show backend information"
+msgstr "Показати дані щодо модуля обробки"
+
+#: client/pkgc-query.c:977
+msgid "Show transaction history"
+msgstr "Показати журнал операцій"
+
+#: client/pkgc-query.c:983
+msgid "Search for packages"
+msgstr "Шукати пакунки"
+
+#: client/pkgc-query.c:989
+msgid "List packages"
+msgstr "Вивести список пакунків"
+
+#: client/pkgc-query.c:995
+msgid "Show package information"
+msgstr "Показати дані щодо пакунків"
+
+#: client/pkgc-query.c:1001
+msgid "Show package dependencies"
+msgstr "Показати залежності пакунка"
+
+#: client/pkgc-query.c:1007
+msgid "Show packages providing a capability"
+msgstr "Показати пакунки, які забезпечують роботу можливості"
+
+#: client/pkgc-query.c:1013
+msgid "Show files in package"
+msgstr "Показати файли у пакунку"
+
+#: client/pkgc-query.c:1019
+msgid "Get available updates"
+msgstr "Отримати доступні оновлення"
+
+#: client/pkgc-query.c:1025
+msgid "Get update details"
+msgstr "Отримати подробиці щодо оновлення"
+
+#: client/pkgc-query.c:1031
+msgid "Resolve package names"
+msgstr "Розв'язати назви пакунка"
+
+#: client/pkgc-query.c:1037
+msgid "Show packages requiring this package"
+msgstr "Показати пакунки, яким потрібен цей пакунок"
+
+#: client/pkgc-query.c:1043
+msgid "List available filters and categories"
+msgstr "Вивести список усіх доступних фільтрів та категорій"
+
+#: client/pkgc-query.c:1049
+msgid "Show available distribution upgrades"
+msgstr "Показати доступні оновлення дистрибутива"
+
+#: client/pkgc-query.c:1055
+msgid "Get time since last action"
+msgstr "Отримтаи час з моменту останньої дії"
+
+#. TRANSLATORS: Description for pkgctl repo-list
+#: client/pkgc-repo.c:82
+msgid "List all configured package repositories."
+msgstr "Вивести список усіх налаштованих сховищ пакунків."
+
+#. TRANSLATORS: Description for pkgctl repo-enable
+#: client/pkgc-repo.c:115
+msgid "Enable the specified repository."
+msgstr "Увімкнути вказане сховище."
+
+#: client/pkgc-repo.c:134
+#, c-format
+msgid "Repository '%s' enabled"
+msgstr "Сховище «%s» увімкнено"
+
+#. TRANSLATORS: Description for pkgctl repo-disable
+#: client/pkgc-repo.c:155
+msgid "Disable the specified repository."
+msgstr "Вимкнути вказане сховище."
+
+#: client/pkgc-repo.c:174
+#, c-format
+msgid "Repository '%s' disabled"
+msgstr "Сховище «%s» вимкнено"
+
+#: client/pkgc-repo.c:194
+msgid "Automatically remove orphaned packages"
+msgstr "Автоматично вилучати осиротілі пакунки"
+
+#. TRANSLATORS: Description for pkgctl repo-remove
+#: client/pkgc-repo.c:204
+msgid "Remove the specified repository."
+msgstr "Вилучити вказане сховище."
+
+#: client/pkgc-repo.c:224
+#, c-format
+msgid "Repository '%s' removed"
+msgstr "Сховище «%s» вилучено"
+
+#: client/pkgc-repo.c:241
+msgid "List repositories"
+msgstr "Вивести список сховищ"
+
+#: client/pkgc-repo.c:247
+msgid "Enable a repository"
+msgstr "Увімкнути сховище"
+
+#: client/pkgc-repo.c:253
+msgid "Disable a repository"
+msgstr "Вимкнути сховище"
+
+#: client/pkgc-repo.c:259
+msgid "Remove a repository"
+msgstr "Вилучити сховище"
+
+#: client/pkgc-util.c:94
+msgid "Not connected to PackageKit daemon"
+msgstr "З'єднання з фоновою службою PackageKit не встановлено"
+
+#. TRANSLATORS: A duration in seconds
+#: client/pkgc-util.c:131
+#, c-format
+msgid "%u seconds"
+msgstr "%u секунд"
+
+#. TRANSLATORS: A duration in minutes & seconds
+#: client/pkgc-util.c:137
+#, c-format
+msgid "%u min %u sec"
+msgstr "%u хв. %u с"
+
+#. TRANSLATORS: A duration in minutes
+#: client/pkgc-util.c:140
+#, c-format
+msgid "%u min"
+msgstr "%u хв."
+
+#. TRANSLATORS: A duration in hours & remaining minutes
+#: client/pkgc-util.c:147
+#, c-format
+msgid "%u h %u min"
+msgstr "%u год. %u хв."
+
+#. TRANSLATORS: A duration in hours
+#: client/pkgc-util.c:150
+#, c-format
+msgid "%u h"
+msgstr "%u год."
+
+#. TRANSLATORS: A duration in days & remaining hours
+#: client/pkgc-util.c:157
+#, c-format
+msgid "%u days %u h"
+msgstr "%u д. %u год."
+
+#. TRANSLATORS: A duration in days
+#: client/pkgc-util.c:160
+#, c-format
+msgid "%u days"
+msgstr "%u д."
+
+#: client/pkgc-util.c:275
+msgid "Error"
+msgstr "Помилка"
+
+#. TRANSLATORS: A warning message prefix, displayed on the command-line
+#: client/pkgc-util.c:307
+msgid "Warning:"
+msgstr "Попередження:"
+
+#. TRANSLATORS: Failed to parse command-line options in pkgctl
+#: client/pkgc-util.c:427 client/pkgctl.c:188
+#, c-format
+msgid "Failed to parse options: %s"
+msgstr "Не вдалося обробити параметри: %s"
+
+#. TRANSLATORS: Usage summary in pkgctl if the user has provided the wrong number of parameters
+#: client/pkgc-util.c:433
+#, c-format
+msgid "Usage: %s %s %s"
+msgstr "Користування: %s %s %s"
+
+#. TRANSLATORS: Label for the package name in package details
+#. TRANSLATORS: Label for package update infos
+#: client/pkgc-util.c:606 client/pkgc-util.c:760
+msgid "Package:"
+msgstr "Пакунок:"
+
+#. TRANSLATORS: Label for the package version in package details
+#: client/pkgc-util.c:610
+msgid "Version:"
+msgstr "Версія:"
+
+#. TRANSLATORS: Label for the package summary in package details
+#: client/pkgc-util.c:617
+msgid "Summary:"
+msgstr "Резюме:"
+
+#. TRANSLATORS: Label for the package description in package details
+#: client/pkgc-util.c:625
+msgid "Description:"
+msgstr "Опис:"
+
+#. TRANSLATORS: Label for the package license in package details
+#: client/pkgc-util.c:632
+msgid "License:"
+msgstr "Ліцензування:"
+
+#. TRANSLATORS: Label for the package URL in package details
+#: client/pkgc-util.c:639
+msgid "URL:"
+msgstr "Адреса:"
+
+#. TRANSLATORS: Label for the package group in package details
+#: client/pkgc-util.c:646
+msgid "Group:"
+msgstr "Група:"
+
+#. TRANSLATORS: Label for the package size in package details
+#: client/pkgc-util.c:654
+msgid "Installed Size:"
+msgstr "Розмір встановленого:"
+
+#. TRANSLATORS: Label for the package download size in package details
+#: client/pkgc-util.c:662
+msgid "Download Size:"
+msgstr "Розмір отриманого:"
+
+#. TRANSLATORS: Header for the update details section
+#: client/pkgc-util.c:756
+msgid "Update Details:"
+msgstr "Подробиці щодо оновлення:"
+
+#. TRANSLATORS: Label for update details
+#: client/pkgc-util.c:767
+msgid "Updates:"
+msgstr "Оновлення:"
+
+#. TRANSLATORS: Label for obsoleted packages in update details
+#: client/pkgc-util.c:776
+msgid "Obsoletes:"
+msgstr "Робить застарілими:"
+
+#. TRANSLATORS: Label for vendor in update details
+#: client/pkgc-util.c:785
+msgid "Vendor:"
+msgstr "Постачальник:"
+
+#. TRANSLATORS: Label for issue-tracker in update details
+#: client/pkgc-util.c:794
+msgid "Issue Tracker:"
+msgstr "Система стеження за вадами:"
+
+#. TRANSLATORS: Label for CVE information in update details
+#: client/pkgc-util.c:803
+msgid "CVE:"
+msgstr "CVE:"
+
+#. TRANSLATORS: Label for restart information in update details
+#: client/pkgc-util.c:811
+msgid "Restart:"
+msgstr "Перезапуск:"
+
+#. TRANSLATORS: Label for update text in update details
+#: client/pkgc-util.c:820
+msgid "Update text:"
+msgstr "Текст оновлення:"
+
+#. TRANSLATORS: Label for changelog in update details
+#: client/pkgc-util.c:827
+msgid "Changes:"
+msgstr "Зміни:"
+
+#. TRANSLATORS: Label for update state in update details
+#: client/pkgc-util.c:834
+msgid "State:"
+msgstr "Стан:"
+
+#. TRANSLATORS: Label for issued date in update details
+#: client/pkgc-util.c:843
+msgid "Issued:"
+msgstr "Випущено:"
+
+#. TRANSLATORS: Label for updated date in update details
+#: client/pkgc-util.c:850
+msgid "Updated:"
+msgstr "Оновлено:"
+
+#. TRANSLATORS: Label for transaction information
+#: client/pkgc-util.c:967
+msgid "Transaction:"
+msgstr "Операція:"
+
+#. TRANSLATORS: Label for system time of the transaction
+#: client/pkgc-util.c:971
+msgid "System time:"
+msgstr "Системний час:"
+
+#. TRANSLATORS: Label for transaction success status
+#: client/pkgc-util.c:975
+msgid "Succeeded:"
+msgstr "Успішне:"
+
+#: client/pkgc-util.c:979 client/pkcon/pk-console.c:169
+msgid "True"
+msgstr "Так"
+
+#: client/pkgc-util.c:980 client/pkcon/pk-console.c:169
+msgid "False"
+msgstr "Ні"
+
+#. TRANSLATORS: Label for transaction role
+#: client/pkgc-util.c:984
+msgid "Role:"
+msgstr "Роль:"
+
+#. TRANSLATORS: Label for transaction duration
+#: client/pkgc-util.c:991
+msgid "Duration:"
+msgstr "Тривалість:"
+
+#. TRANSLATORS: Label for transaction command line
+#: client/pkgc-util.c:998
+msgid "Command line:"
+msgstr "Командний рядок:"
+
+#. TRANSLATORS: Label for transaction user ID
+#: client/pkgc-util.c:1004
+msgid "User ID:"
+msgstr "Ід. користувача:"
+
+#. TRANSLATORS: Label for transaction username
+#: client/pkgc-util.c:1013
+msgid "Username:"
+msgstr "Користувач:"
+
+#. TRANSLATORS: Label for transaction real name
+#: client/pkgc-util.c:1019
+msgid "Real name:"
+msgstr "Справжнє ім’я:"
+
+#. TRANSLATORS: Label for affected packages in transaction
+#. TRANSLATORS: these are packages touched by the transaction
+#: client/pkgc-util.c:1031 client/pkgc-util.c:1050
+#: client/pkcon/pk-console.c:201
+msgid "Affected packages:"
+msgstr "Задіяні пакунки:"
+
+#. TRANSLATORS: No packages were affected by the transaction
+#: client/pkgc-util.c:1053
+msgid "None"
+msgstr "Немає"
+
+#. TRANSLATORS: more than one package could be found that matched,
+#. * to follow is a list of possible packages
+#: client/pkgc-util.c:1142 client/pkcon/pk-console.c:932
+msgid "More than one package matches:"
+msgstr "З ключем пошуку збігається декілька пакунків:"
+
+#. prompt user for selection
+#. TRANSLATORS: This finds out which package in the list to use
+#: client/pkgc-util.c:1154 client/pkcon/pk-console.c:944
+#, c-format
+msgid "Please choose the correct package: "
+msgstr "Будь ласка, оберіть належний пакунок: "
+
+#: client/pkgc-util.c:1198
+#, c-format
+msgid "Package not found: %s"
+msgstr "Пакунок не знайдено: %s"
+
+#. TRANSLATORS: command line argument, just show the version string
+#: client/pkgctl.c:76
+msgid "Show pkgctl version"
+msgstr "Показати дані щодо версії pkgctl"
+
+#: client/pkgctl.c:78
+msgid "Show help"
+msgstr "Показати довідку"
+
+#: client/pkgctl.c:80
+msgid "Only provide minimal output"
+msgstr "Надавати лише мінімальне виведення"
+
+#: client/pkgctl.c:82
+msgid "Show more detailed output"
+msgstr "Показати докладніші виведенні дані"
+
+#: client/pkgctl.c:84
+msgid "Output in JSON format"
+msgstr "Вивести дані у форматі JSON"
+
+#: client/pkgctl.c:86
+msgid "Disable colored output"
+msgstr "Вимкнути кольорове виведення"
+
+#. TRANSLATORS: command line argument, do we ask questions
+#: client/pkgctl.c:89
+msgid "Answer 'yes' to all questions"
+msgstr "Відповісти «так» на усі питання"
+
+#. TRANSLATORS: command line argument, use a filter to narrow down results
+#: client/pkgctl.c:92
+msgid "Filter packages (installed, available, etc.)"
+msgstr "Фільтрувати пакунки (встановлені, доступні тощо)"
+
+#: client/pkgctl.c:92
+msgid "FILTER"
+msgstr "ФІЛЬТР"
+
+#. TRANSLATORS: command line argument, this command is not a priority
+#: client/pkgctl.c:95 client/pkcon/pk-console.c:1725
+msgid "Run the command using idle network bandwidth and also using less power"
+msgstr "Виконати команду з мінімальним використанням мережевого каналу і меншою витратою ресурсів системи"
+
+#: client/pkgctl.c:118
+msgid "No command specified. Use --help for usage information."
+msgstr "Не вказано команди. Скористайтеся --help, щоб отримати відомості щодо користування."
+
+#: client/pkgctl.c:126
+#, c-format
+msgid "Unknown command: %s"
+msgstr "Невідома команда: %s"
+
+#: client/pkgctl.c:135
+#, c-format
+msgid "Failed to connect to PackageKit: %s"
+msgstr "Не вдалося встановити з'єднання з PackageKit: %s"
+
+#: client/pkgctl.c:196
+#, c-format
+msgid "Version: %s"
+msgstr "Версія: %s"
+
+#: client/pkgctl.c:211
+msgid "Available Commands:"
+msgstr "Доступні команди:"
+
+#: client/pkgctl.c:217
+msgid "Use 'pkgctl COMMAND --help' for command-specific help."
+msgstr "Скористайтеся командою «pkgctl КОМАНДА --help» для отримання довідки щодо певної команди."
+
+#. TRANSLATORS: The user specified
+#. * an incorrect filter
+#: client/pkgctl.c:254 client/pkcon/pk-console.c:1842
+msgid "The filter specified was invalid"
+msgstr "Вказано некоректний фільтр"
+
 #. TRANSLATORS: this is an atomic transaction
 #. TRANSLATORS: the role is the point of the transaction,
 #. * e.g. update-packages
-#: client/pk-console.c:165 client/pk-console.c:575
+#: client/pkcon/pk-console.c:165 client/pkcon/pk-console.c:575
 msgid "Transaction"
 msgstr "Операція"
 
 #. TRANSLATORS: this is the time the transaction was started in system timezone
-#: client/pk-console.c:167
+#: client/pkcon/pk-console.c:167
 msgid "System time"
 msgstr "Системний час"
 
 #. TRANSLATORS: this is if the transaction succeeded or not
-#: client/pk-console.c:169
+#: client/pkcon/pk-console.c:169
 msgid "Succeeded"
 msgstr "Успішне"
 
-#: client/pk-console.c:169
-msgid "True"
-msgstr "Так"
-
-#: client/pk-console.c:169
-msgid "False"
-msgstr "Ні"
-
 #. TRANSLATORS: this is the transactions role, e.g. "update-packages"
-#: client/pk-console.c:171
+#: client/pkcon/pk-console.c:171
 msgid "Role"
 msgstr "Роль"
 
 #. TRANSLATORS: this is The duration of the transaction
-#: client/pk-console.c:176
+#: client/pkcon/pk-console.c:176
 msgid "Duration"
 msgstr "Тривалість"
 
-#: client/pk-console.c:176
+#: client/pkcon/pk-console.c:176
 msgid "(seconds)"
 msgstr "(секунд)"
 
 #. TRANSLATORS: this is The command line used to do the action
-#: client/pk-console.c:180
+#: client/pkcon/pk-console.c:180
 msgid "Command line"
 msgstr "Командний рядок"
 
 #. TRANSLATORS: this is the user ID of the user that started the action
-#: client/pk-console.c:182
+#: client/pkcon/pk-console.c:182
 msgid "User ID"
 msgstr "ІД користувача"
 
 #. TRANSLATORS: this is the username, e.g. hughsie
-#: client/pk-console.c:189
+#: client/pkcon/pk-console.c:189
 msgid "Username"
 msgstr "Користувач"
 
 #. TRANSLATORS: this is the users real name, e.g. "Richard Hughes"
-#: client/pk-console.c:193
+#: client/pkcon/pk-console.c:193
 msgid "Real name"
 msgstr "Справжнє ім’я"
 
 #. TRANSLATORS: these are packages touched by the transaction
-#: client/pk-console.c:201
-msgid "Affected packages:"
-msgstr "Задіяні пакунки:"
-
-#. TRANSLATORS: these are packages touched by the transaction
-#: client/pk-console.c:204
+#: client/pkcon/pk-console.c:204
 msgid "Affected packages: None"
 msgstr "Задіяні пакунки: Немає"
 
 #. TRANSLATORS: this is the distro, e.g. Fedora 10
-#: client/pk-console.c:230
+#: client/pkcon/pk-console.c:230
 msgid "Distribution"
 msgstr "Дистрибутив"
 
 #. TRANSLATORS: this is type of update, stable or testing
-#: client/pk-console.c:232
+#: client/pkcon/pk-console.c:232
 msgid "Type"
 msgstr "Тип"
 
 #. TRANSLATORS: this is any summary text describing the upgrade
 #. TRANSLATORS: this is the summary of the group
-#: client/pk-console.c:234 client/pk-console.c:267
+#: client/pkcon/pk-console.c:234 client/pkcon/pk-console.c:267
 msgid "Summary"
 msgstr "Резюме"
 
 #. TRANSLATORS: this is the group category name
-#: client/pk-console.c:256
+#: client/pkcon/pk-console.c:256
 msgid "Category"
 msgstr "Категорія"
 
 #. TRANSLATORS: this is group identifier
-#: client/pk-console.c:258
+#: client/pkcon/pk-console.c:258
 msgid "ID"
 msgstr "ІД"
 
 #. TRANSLATORS: this is the parent group
-#: client/pk-console.c:261
+#: client/pkcon/pk-console.c:261
 msgid "Parent"
 msgstr "Батьківська"
 
 #. TRANSLATORS: this is the name of the parent group
 #. TRANSLATORS: this is the name of the backend
-#: client/pk-console.c:264 client/pk-console.c:2342
+#: client/pkcon/pk-console.c:264 client/pkcon/pk-console.c:2340
 msgid "Name"
 msgstr "Назва"
 
 #. TRANSLATORS: this is preferred icon for the group
-#: client/pk-console.c:270
+#: client/pkcon/pk-console.c:270
 msgid "Icon"
 msgstr "Значок"
 
 #. TRANSLATORS: this is a header for the package that can be updated
-#: client/pk-console.c:308
+#: client/pkcon/pk-console.c:308
 msgid "Details about the update:"
 msgstr "Подробиці щодо оновлення:"
 
@@ -150,7 +1023,7 @@ msgstr "Подробиці щодо оновлення:"
 #. TRANSLATORS: the package that is being processed
 #. TRANSLATORS: the package that is not signed by a known key
 #. TRANSLATORS: the package name that was trying to be installed
-#: client/pk-console.c:314 client/pk-console.c:594
+#: client/pkcon/pk-console.c:314 client/pkcon/pk-console.c:594
 #: lib/packagekit-glib2/pk-task-text.c:107
 #: lib/packagekit-glib2/pk-task-text.c:178
 msgid "Package"
@@ -158,248 +1031,238 @@ msgstr "Пакунок"
 
 #. TRANSLATORS: details about the update, any packages that
 #. * this update updates
-#: client/pk-console.c:319
+#: client/pkcon/pk-console.c:319
 msgid "Updates"
 msgstr "Оновлює"
 
 #. TRANSLATORS: details about the update, any packages that
 #. * this update obsoletes
-#: client/pk-console.c:326
+#: client/pkcon/pk-console.c:326
 msgid "Obsoletes"
 msgstr "Робить застарілим"
 
 #. TRANSLATORS: details about the update, the vendor URLs
 #. TRANSLATORS: the vendor (e.g. vmware) that is providing the EULA
-#: client/pk-console.c:332 lib/packagekit-glib2/pk-task-text.c:181
+#: client/pkcon/pk-console.c:332 lib/packagekit-glib2/pk-task-text.c:181
 msgid "Vendor"
 msgstr "Постачальник"
 
 #. TRANSLATORS: details about the update, the bugzilla URLs
-#: client/pk-console.c:338
+#: client/pkcon/pk-console.c:338
 msgid "Bugzilla"
 msgstr "Bugzilla"
 
 #. TRANSLATORS: details about the update, the CVE URLs
-#: client/pk-console.c:344
+#: client/pkcon/pk-console.c:344
 msgid "CVE"
 msgstr "CVE"
 
 #. TRANSLATORS: details about the update, if the package
 #. * requires a restart
-#: client/pk-console.c:350
+#: client/pkcon/pk-console.c:350
 msgid "Restart"
 msgstr "Перезапуск"
 
 #. TRANSLATORS: details about the update, any description of
 #. * the update
-#: client/pk-console.c:355
+#: client/pkcon/pk-console.c:355
 msgid "Update text"
 msgstr "Текст оновлення"
 
 #. TRANSLATORS: details about the update, the changelog for
 #. * the package
-#: client/pk-console.c:360
+#: client/pkcon/pk-console.c:360
 msgid "Changes"
 msgstr "Зміни"
 
 #. TRANSLATORS: details about the update, the ongoing state
 #. * of the update
-#: client/pk-console.c:365
+#: client/pkcon/pk-console.c:365
 msgid "State"
 msgstr "Стан"
 
 #. TRANSLATORS: details about the update, date the update
 #. * was issued
-#: client/pk-console.c:370
+#: client/pkcon/pk-console.c:370
 msgid "Issued"
 msgstr "Випущено"
 
 #. TRANSLATORS: details about the update, date the update
 #. * was updated
 #. TRANSLATORS: The action of the package, in past tense
-#: client/pk-console.c:375 lib/packagekit-glib2/pk-enum.c:1107
+#: client/pkcon/pk-console.c:375 lib/packagekit-glib2/pk-enum.c:1107
 msgid "Updated"
 msgstr "Оновлено"
 
 #. TRANSLATORS: if the repo is enabled
-#: client/pk-console.c:397
+#: client/pkcon/pk-console.c:397
 msgid "Enabled"
 msgstr "Увімкнено"
 
 #. TRANSLATORS: if the repo is disabled
-#: client/pk-console.c:400
+#: client/pkcon/pk-console.c:400
 msgid "Disabled"
 msgstr "Вимкнено"
 
 #. TRANSLATORS: a package requires the system to be restarted
-#: client/pk-console.c:429
+#: client/pkcon/pk-console.c:429
 msgid "System restart required by:"
 msgstr "Перезавантаження системи потрібне для:"
 
 #. TRANSLATORS: a package requires the session to be restarted
-#: client/pk-console.c:432
+#: client/pkcon/pk-console.c:432
 msgid "Session restart required:"
 msgstr "Перезапуск сеансу потрібен:"
 
 #. TRANSLATORS: a package requires the system to be restarted
 #. * due to a security update
-#: client/pk-console.c:436
+#: client/pkcon/pk-console.c:436
 msgid "System restart (security) required by:"
 msgstr "Потрібне перезавантаження системи (безпека) для:"
 
 #. TRANSLATORS: a package requires the session to be restarted
 #. * due to a security update
-#: client/pk-console.c:440
+#: client/pkcon/pk-console.c:440
 msgid "Session restart (security) required:"
 msgstr "Потрібен перезапуск сеансу (безпека):"
 
 #. TRANSLATORS: a package requires the application to be restarted
-#: client/pk-console.c:443
+#: client/pkcon/pk-console.c:443
 msgid "Application restart required by:"
 msgstr "Потрібен перезапуск програми для:"
 
 #. TRANSLATORS: This a list of details about the package
-#: client/pk-console.c:488
+#: client/pkcon/pk-console.c:488
 msgid "Package description"
 msgstr "Опис пакунка"
 
 #. TRANSLATORS: This where the package has no files
-#: client/pk-console.c:509
+#: client/pkcon/pk-console.c:509
 msgid "No files"
 msgstr "Без файлів"
 
 #. TRANSLATORS: This a list files contained in the package
-#: client/pk-console.c:514
+#: client/pkcon/pk-console.c:514
 msgid "Package files"
 msgstr "Файли пакунка"
 
 #. TRANSLATORS: the percentage complete of the transaction
-#: client/pk-console.c:610
+#: client/pkcon/pk-console.c:610
 msgid "Percentage"
 msgstr "Відсотки"
 
 #. TRANSLATORS: the status of the transaction (e.g. downloading)
-#: client/pk-console.c:633
+#: client/pkcon/pk-console.c:633
 msgid "Status"
 msgstr "Стан"
 
 #. TRANSLATORS: the results from the transaction
-#: client/pk-console.c:671
+#: client/pkcon/pk-console.c:671
 msgid "Results:"
 msgstr "Результат:"
 
 #. TRANSLATORS: we failed to get any results, which is pretty
 #. * fatal in my book
-#: client/pk-console.c:677 client/pk-console.c:838
+#: client/pkcon/pk-console.c:677 client/pkcon/pk-console.c:838
 msgid "Fatal error"
 msgstr "Критична помилка"
 
 #. TRANSLATORS: the user asked to update everything,
 #. * but there is nothing that can be updated
-#: client/pk-console.c:702
+#: client/pkcon/pk-console.c:702
 msgid "There are no packages to update."
 msgstr "Пакунків для оновлення не виявлено."
 
 #. TRANSLATORS: the transaction failed in a way we could
 #. * not expect
 #. TRANSLATORS: the transaction failed in a way we could not expect
-#: client/pk-console.c:706 contrib/command-not-found/pk-command-not-found.c:670
+#: client/pkcon/pk-console.c:706
+#: contrib/command-not-found/pk-command-not-found.c:670
 msgid "The transaction failed"
 msgstr "Спроба виконання операції зазнала невдачі"
 
 #. TRANSLATORS: print a message when there are no updates
-#: client/pk-console.c:735
+#: client/pkcon/pk-console.c:735
 msgid "There are no updates available at this time."
 msgstr "На поточний момент оновлень не виявлено."
 
-#: client/pk-console.c:758
+#: client/pkcon/pk-console.c:758
 msgid "There are no upgrades available at this time."
 msgstr "На поточний момент оновлень не виявлено."
 
 #. TRANSLATORS: a package needs to restart their system
-#: client/pk-console.c:820
+#: client/pkcon/pk-console.c:820
 msgid "Please restart the computer to complete the update."
 msgstr "Щоб завершити оновлення, перезавантажте систему."
 
 #. TRANSLATORS: a package needs to restart the session
-#: client/pk-console.c:823
+#: client/pkcon/pk-console.c:823
 msgid "Please logout and login to complete the update."
 msgstr "Щоб завершити оновлення, вийдіть з облікового запису і увійдіть знову."
 
 #. TRANSLATORS: a package needs to restart their system (due to security)
-#: client/pk-console.c:826
+#: client/pkcon/pk-console.c:826
 msgid "Please restart the computer to complete the update as important security updates have been installed."
 msgstr "перезавантажте систему, щоб завершити встановлення важливих оновлень безпеки."
 
 #. TRANSLATORS: a package needs to restart the session (due to security)
-#: client/pk-console.c:829
+#: client/pkcon/pk-console.c:829
 msgid "Please logout and login to complete the update as important security updates have been installed."
 msgstr "Щоб завершити встановлення важливих оновлень безпеки вийдіть з облікового запису і увійдіть до нього знову."
 
-#. TRANSLATORS: more than one package could be found that matched,
-#. * to follow is a list of possible packages
-#: client/pk-console.c:932
-msgid "More than one package matches:"
-msgstr "З ключем пошуку збігається декілька пакунків:"
-
-#. TRANSLATORS: This finds out which package in the list to use
-#: client/pk-console.c:944
-msgid "Please choose the correct package: "
-msgstr "Будь ласка, оберіть належний пакунок: "
-
 #. TRANSLATORS: we asked to install a package
 #. * that could not be found in any repo
-#: client/pk-console.c:981
+#: client/pkcon/pk-console.c:981
 msgid "Package not found"
 msgstr "Пакунок не знайдено"
 
 #. TRANSLATORS: we couldn't find anything
-#: client/pk-console.c:999
+#: client/pkcon/pk-console.c:999
 msgid "No packages were found"
 msgstr "Пакунків не знайдено"
 
 #. TRANSLATORS: The user used
 #. * 'pkcon install dave.rpm' rather than
 #. * 'pkcon install-local dave.rpm'
-#: client/pk-console.c:1024
+#: client/pkcon/pk-console.c:1024
 #, c-format
 msgid "Expected package name, actually got file. Try using 'pkcon install-local %s' instead."
 msgstr "Мало бути передано назву пакунка, передано файл. Спробуйте скористатися командою «pkcon install-local %s»."
 
 #. TRANSLATORS: There was an error finding a package
 #. * for installation. The detailed error follows.
-#: client/pk-console.c:1059
+#: client/pkcon/pk-console.c:1059
 #, c-format
 msgid "This tool could not find any available package: %s"
 msgstr "Програмі не вдалося знайти жодного доступного пакунка: %s"
 
 #. TRANSLATORS: We were unable to find a package for installation.
-#: client/pk-console.c:1076
+#: client/pkcon/pk-console.c:1076
 msgid "This tool could not find any available package."
 msgstr "Програмі не вдалося знайти жодного доступного пакунка."
 
 #. TRANSLATORS: There was an error finding a package
 #. * for installation, it may already be installed.
-#: client/pk-console.c:1085
+#: client/pkcon/pk-console.c:1085
 msgid "The selected packages may already be installed."
 msgstr "Можливо, вибрані пакунки вже встановлено."
 
 #. TRANSLATORS: There was an error getting the list
 #. * of files for the package. The detailed error follows
-#: client/pk-console.c:1113
+#: client/pkcon/pk-console.c:1113
 #, c-format
 msgid "This tool could not find the installed package: %s"
 msgstr "Програмі не вдалося знайти встановлений пакунок: %s"
 
 #. TRANSLATORS: There was an error getting the list
 #. * of files for the package. The detailed error follows
-#: client/pk-console.c:1142 client/pk-console.c:1173
+#: client/pkcon/pk-console.c:1142 client/pkcon/pk-console.c:1173
 #, c-format
 msgid "This tool could not find the package: %s"
 msgstr "Програмі не вдалося знайти пакунок: %s"
 
 #. TRANSLATORS: there are no updates, so nothing to do
-#: client/pk-console.c:1218
+#: client/pkcon/pk-console.c:1220
 msgid "No packages require updating to newer versions."
 msgstr "Жоден з пакунків не потребує оновлення."
 
@@ -411,122 +1274,91 @@ msgstr "Жоден з пакунків не потребує оновлення.
 #. * details about the package. The detailed error follows
 #. TRANSLATORS: The package name was not found in
 #. * any software repositories. The detailed error follows
-#: client/pk-console.c:1256 client/pk-console.c:1285 client/pk-console.c:1324
-#: client/pk-console.c:1383 client/pk-console.c:1411
+#: client/pkcon/pk-console.c:1258 client/pkcon/pk-console.c:1287
+#: client/pkcon/pk-console.c:1326 client/pkcon/pk-console.c:1385
+#: client/pkcon/pk-console.c:1413
 #, c-format
 msgid "This tool could not find all the packages: %s"
 msgstr "Програмі не вдалося знайти всі пакунки: %s"
 
-#. TRANSLATORS: This is when the daemon crashed, and we are up
-#. * shit creek without a paddle
-#: client/pk-console.c:1438
-msgid "The daemon crashed mid-transaction!"
-msgstr "Аварійне завершення фонової служби під час операції!"
-
 #. TRANSLATORS: This is the header to the --help menu
-#: client/pk-console.c:1470
+#: client/pkcon/pk-console.c:1472
 msgid "PackageKit Console Interface"
 msgstr "Консольний інтерфейс PackageKit"
 
 #. these are commands we can use with pkcon
-#: client/pk-console.c:1472
+#: client/pkcon/pk-console.c:1474
 msgid "Subcommands:"
 msgstr "Підкоманди:"
 
-#. TRANSLATORS: we keep a database updated with the time that an
-#. * action was last executed
-#: client/pk-console.c:1570
-msgid "Failed to get the time since this action was last completed"
-msgstr "Не вдалося визначити час, коли цю дію було виконано востаннє"
-
 #. TRANSLATORS: this is the time since this role was used
-#: client/pk-console.c:1574
+#: client/pkcon/pk-console.c:1576
 msgid "Time since"
 msgstr "З часу"
 
 #. TRANSLATORS: There follows a list of packages downloaded and ready
 #. * to be updated
-#: client/pk-console.c:1594
+#: client/pkcon/pk-console.c:1596
 msgid "Prepared updates:"
 msgstr "Приготовані оновлення:"
 
 #. TRANSLATORS: The network settings could not be sent
-#: client/pk-console.c:1663
+#: client/pkcon/pk-console.c:1665
 msgid "The proxy could not be set"
 msgstr "Не вдалося встановити параметри проксі-сервера"
 
 #. TRANSLATORS: command line argument, just show the version string
-#: client/pk-console.c:1705 client/pk-monitor.c:330
+#: client/pkcon/pk-console.c:1706 client/pkcon/pk-monitor.c:330
 msgid "Show the program version and exit"
 msgstr "Показати версію програми і завершити роботу"
 
 #. TRANSLATORS: command line argument, use a filter to narrow down results
-#: client/pk-console.c:1708
+#: client/pkcon/pk-console.c:1709
 msgid "Set the filter, e.g. installed"
 msgstr "Встановити фільтр, наприклад, встановлені"
 
 #. command line argument, do we ask questions
-#: client/pk-console.c:1711
+#: client/pkcon/pk-console.c:1712
 msgid "Install the packages without asking for confirmation"
 msgstr "Встановити пакунки без запиту щодо підтвердження"
 
-#. command line argument, do we just download or apply changes
-#: client/pk-console.c:1714
-msgid "Prepare the transaction by downloading packages only"
-msgstr "Приготуватися до операції, лише отримати пакунки"
-
 #. command line argument, do we allow package downgrades
-#: client/pk-console.c:1717
+#: client/pkcon/pk-console.c:1718
 msgid "Allow packages to be downgraded during transaction"
 msgstr "Дозволити під час виконання дії знижувати версії пакунків"
 
-#: client/pk-console.c:1719
+#: client/pkcon/pk-console.c:1720
 msgid "Allow packages to be reinstalled during transaction"
 msgstr "Дозволити під час виконання дії повторне встановлення пакунків"
 
-#: client/pk-console.c:1721
-msgid "Automatically remove unused dependencies"
-msgstr "Автоматично вилучати невикористані залежності"
-
-#. TRANSLATORS: command line argument, this command is not a priority
-#: client/pk-console.c:1724
-msgid "Run the command using idle network bandwidth and also using less power"
-msgstr "Виконати команду з мінімальним використанням мережевого каналу і меншою витратою ресурсів системи"
-
 #. TRANSLATORS: command line argument, just output without fancy formatting
-#: client/pk-console.c:1727
+#: client/pkcon/pk-console.c:1728
 msgid "Print to screen a machine readable output, rather than using animated widgets"
 msgstr "Вивести дані про поступ у простому текстовому форматі, без використання анімованих віджетів"
 
 #. TRANSLATORS: command line argument, just output without fancy formatting
-#: client/pk-console.c:1730
+#: client/pkcon/pk-console.c:1731
 msgid "The maximum metadata cache age (in seconds). Use -1 to use only cache, 1 to reload cache."
 msgstr "Максимальний вік кешу метаданих (у секундах). Скористайтеся -1, щоб використовувати лише кешовані дані; 1 — перезавантажити кеш."
 
 #. command line argument, do we ask questions
-#: client/pk-console.c:1733
+#: client/pkcon/pk-console.c:1734
 msgid "Allow untrusted packages to be installed."
 msgstr "Дозволити встановлення пакунків з ненадійних джерел."
 
 #. TRANSLATORS: we failed to contact the daemon
-#: client/pk-console.c:1771
+#: client/pkcon/pk-console.c:1769
 msgid "Failed to parse command line"
 msgstr "Не вдалося виконати обробку рядка команди"
 
 #. TRANSLATORS: we failed to contact the daemon
-#: client/pk-console.c:1781
+#: client/pkcon/pk-console.c:1779
 msgid "Failed to contact PackageKit"
 msgstr "Не вдалося зв’язатися з PackageKit"
 
-#. TRANSLATORS: The user specified
-#. * an incorrect filter
-#: client/pk-console.c:1844
-msgid "The filter specified was invalid"
-msgstr "Вказано некоректний фільтр"
-
 #. TRANSLATORS: a search type can
 #. * be name, details, file, etc
-#: client/pk-console.c:1870
+#: client/pkcon/pk-console.c:1868
 msgid "A search type is required, e.g. name"
 msgstr "Тип пошуку, якщо такий потрібен, наприклад, назва"
 
@@ -534,90 +1366,79 @@ msgstr "Тип пошуку, якщо такий потрібен, наприк�
 #. * needs to provide a search term
 #. TRANSLATORS: the user needs
 #. * to provide a search term
-#: client/pk-console.c:1880 client/pk-console.c:1897 client/pk-console.c:1914
-#: client/pk-console.c:1931
+#: client/pkcon/pk-console.c:1878 client/pkcon/pk-console.c:1895
+#: client/pkcon/pk-console.c:1912 client/pkcon/pk-console.c:1929
 msgid "A search term is required"
 msgstr "Потрібен ключ пошуку"
 
 #. TRANSLATORS: the user did not
 #. * specify what they wanted to install
-#: client/pk-console.c:1957
+#: client/pkcon/pk-console.c:1955
 msgid "A package name to install is required"
 msgstr "Слід вказати назву пакунка, який слід встановити"
 
 #. TRANSLATORS: the user did not
 #. * specify what they wanted to install
-#: client/pk-console.c:1971
+#: client/pkcon/pk-console.c:1969
 msgid "A filename to install is required"
 msgstr "Слід вказати назву файла, який слід встановити"
 
 #. TRANSLATORS: geeky error, real
 #. * users won't see this
-#: client/pk-console.c:1987
+#: client/pkcon/pk-console.c:1985
 msgid "A type, key_id and package_id are required"
 msgstr "Слід вказати тип, ідентифікатор ключа і ідентифікатор пакунка"
 
 #. TRANSLATORS: the user did not
 #. * specify what they wanted to remove
-#: client/pk-console.c:2005
+#: client/pkcon/pk-console.c:2003
 msgid "A package name to remove is required"
 msgstr "Слід вказати назву пакунка, який потрібно вилучити"
 
 #. TRANSLATORS: the user did not
 #. * specify anything about what to
 #. * download or where
-#: client/pk-console.c:2018
+#: client/pkcon/pk-console.c:2016
 msgid "A destination directory and the package names to download are required"
 msgstr "Слід вказати каталог призначення і назви пакунків, які потрібно звантажити"
 
 #. TRANSLATORS: the directory does
 #. * not exist, so we can't continue
-#: client/pk-console.c:2028
+#: client/pkcon/pk-console.c:2026
 msgid "Directory not found"
 msgstr "Каталог не знайдено"
 
 #. TRANSLATORS: geeky error, real
 #. * users won't see this
-#: client/pk-console.c:2043
+#: client/pkcon/pk-console.c:2041
 msgid "A licence identifier (eula-id) is required"
 msgstr "Слід вказати ідентифікатор ліцензії (eula-id)"
 
 #. TRANSLATORS: The user did not
 #. * specify a package name
-#: client/pk-console.c:2069
+#: client/pkcon/pk-console.c:2067
 msgid "A package name to resolve is required"
 msgstr "Слід вказати назву пакунка для розв’язання конфлікту"
 
 #. TRANSLATORS: The user did not
 #. * specify a repository name
-#: client/pk-console.c:2086 client/pk-console.c:2103
+#: client/pkcon/pk-console.c:2084 client/pkcon/pk-console.c:2101
 msgid "A repository name is required"
 msgstr "Слід вказати назву сховища"
 
-#: client/pk-console.c:2119
+#: client/pkcon/pk-console.c:2117
 msgid "A repo name, parameter and value are required"
 msgstr "Слід вказати назву сховища, параметр і значення"
 
-#: client/pk-console.c:2136
+#: client/pkcon/pk-console.c:2134
 msgid "A repo id and autoremove required"
 msgstr "Слід вказати ідентифікатор сховища та autoremove"
 
-#. TRANSLATORS: The user didn't
-#. * specify what action to use
-#: client/pk-console.c:2163
-msgid "An action, e.g. 'update-packages' is required"
-msgstr "Слід вказати дію, наприклад «update-packages»"
-
-#. TRANSLATORS: The user specified
-#. * an invalid action
-#: client/pk-console.c:2173
-msgid "A correct role is required"
-msgstr "Слід вказати належну роль"
-
 #. TRANSLATORS: The user did not
 #. * provide a package name
-#: client/pk-console.c:2193 client/pk-console.c:2210 client/pk-console.c:2222
-#: client/pk-console.c:2252 client/pk-console.c:2285
+#: client/pkcon/pk-console.c:2191 client/pkcon/pk-console.c:2208
+#: client/pkcon/pk-console.c:2220 client/pkcon/pk-console.c:2250
+#: client/pkcon/pk-console.c:2283
 msgid "A package name is required"
 msgstr "Слід вказати назву пакунка"
 
@@ -625,59 +1446,51 @@ msgstr "Слід вказати назву пакунка"
 #. * "provides" certain things, e.g.
 #. * mime(gstreamer-decoder-mp3),
 #. * the user didn't specify it
-#: client/pk-console.c:2236
+#: client/pkcon/pk-console.c:2234
 msgid "A package provide string is required"
 msgstr "Слід вказати рядок вмісту"
 
-#: client/pk-console.c:2263 client/pk-console.c:2274
+#: client/pkcon/pk-console.c:2261 client/pkcon/pk-console.c:2272
 msgid "A filename is required"
 msgstr "Слід вказати назву файла"
 
 #. TRANSLATORS: this is the description of the backend
-#: client/pk-console.c:2346
+#: client/pkcon/pk-console.c:2344
 msgid "Description"
 msgstr "Опис"
 
 #. TRANSLATORS: this is the author of the backend
-#: client/pk-console.c:2350
+#: client/pkcon/pk-console.c:2348
 msgid "Author"
 msgstr "Автор"
 
 #. TRANSLATORS: The user did not provide a distro name
-#: client/pk-console.c:2420
+#: client/pkcon/pk-console.c:2418
 msgid "You need to specify a list file to create"
 msgstr "Вам слід вказати файл списку, який слід створити"
 
 #. TRANSLATORS: There was an error
 #. * getting the list of packages.
 #. * The filename follows
-#: client/pk-console.c:2433
+#: client/pkcon/pk-console.c:2431
 #, c-format
 msgid "File already exists: %s"
 msgstr "Файл з такою назвою вже існує: %s"
 
 #. TRANSLATORS: The user tried to use an
 #. * unsupported option on the command line
-#: client/pk-console.c:2451
+#: client/pkcon/pk-console.c:2449
 #, c-format
 msgid "Option '%s' is not supported"
 msgstr "Підтримки параметра «%s» не передбачено"
 
 #. TRANSLATORS: Generic failure of what they asked to do
-#: client/pk-console.c:2461
+#: client/pkcon/pk-console.c:2459
 msgid "Command failed"
 msgstr "Спроба виконання команди зазнала невдачі"
 
-#: client/pk-monitor.c:267
-msgid "Failed to get daemon state"
-msgstr "Спроба визначення стану фонової служби завершилася невдало"
-
-#: client/pk-monitor.c:310
-msgid "Failed to get properties"
-msgstr "Не вдалося звантажити дані щодо властивостей"
-
 #. TRANSLATORS: this is a program that monitors PackageKit
-#: client/pk-monitor.c:341
+#: client/pkcon/pk-monitor.c:341
 msgid "PackageKit Monitor"
 msgstr "Монітор PackageKit"
 
@@ -700,22 +1513,22 @@ msgid "Installing Updates"
 msgstr "Встановлюємо оновлення"
 
 #. TRANSLATORS: we've finished doing offline updates
-#: client/pk-offline-update.c:217
+#: client/pk-offline-update.c:214
 msgid "Rebooting after installing updates…"
 msgstr "Перезавантажуємо систему після встановлення оновлень…"
 
 #. TRANSLATORS: we've finished doing offline updates
-#: client/pk-offline-update.c:259
+#: client/pk-offline-update.c:256
 msgid "Shutting down after installing updates…"
 msgstr "Вимикаємо систему після встановлення оновлень…"
 
 #. TRANSLATORS: we've started doing offline updates
-#: client/pk-offline-update.c:404
+#: client/pk-offline-update.c:401
 msgid "Installing updates; this could take a while..."
 msgstr "Зачекайте, встановлюємо оновлення…"
 
 #. TRANSLATORS: we've started doing offline system upgrade
-#: client/pk-offline-update.c:444
+#: client/pk-offline-update.c:438
 msgid "Installing system upgrade; this could take a while..."
 msgstr "Встановлюємо оновлення системи; зачекайте…"
 
@@ -1296,12 +2109,10 @@ msgstr "Отримання списку дій"
 msgid "Getting system upgrades"
 msgstr "Отримуємо оновлення системи"
 
-#. TRANSLATORS: this is a percentage value we use in messages, e.g. "90%.
-#: lib/packagekit-glib2/pk-progress-bar.c:146
-#: lib/packagekit-glib2/pk-progress-bar.c:191
-#, c-format
-msgid "(%i%%)"
-msgstr "(%i%%)"
+#. TRANSLATORS: The role of the transaction, in present tense
+#: lib/packagekit-glib2/pk-enum.c:1278
+msgid "Repairing system"
+msgstr "Виправлення системи"
 
 #. TRANSLATORS: ask the user if they are comfortable installing insecure packages
 #: lib/packagekit-glib2/pk-task-text.c:54
@@ -1800,3 +2611,27 @@ msgstr "Не встановлюйте цей пакунок, якщо не пе�
 #: src/pk-transaction.c:2744
 msgid "Do not install these packages unless you are sure it is safe to do so."
 msgstr "Не встановлюйте ці пакунки, якщо не певні, що таке встановлення є безпечним."
+
+#, fuzzy
+#~| msgid "Trigger offline updates"
+#~ msgid "Preparing offline update..."
+#~ msgstr "Увімкнути або вимкнути оновлення без з’єднання з інтернетом"
+
+#, fuzzy
+#~| msgid "Trigger offline updates"
+#~ msgid "Prepare offline update"
+#~ msgstr "Увімкнути або вимкнути оновлення без з’єднання з інтернетом"
+
+#, fuzzy
+#~| msgid "Trigger offline updates"
+#~ msgid "Trigger offline update"
+#~ msgstr "Увімкнути або вимкнути оновлення без з’єднання з інтернетом"
+
+#, fuzzy
+#~| msgid "Trigger offline updates"
+#~ msgid "Cancel offline update"
+#~ msgstr "Увімкнути або вимкнути оновлення без з’єднання з інтернетом"
+
+#, c-format
+#~ msgid "(%i%%)"
+#~ msgstr "(%i%%)"

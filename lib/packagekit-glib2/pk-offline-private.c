@@ -110,6 +110,7 @@ pk_offline_auth_cancel (GError **error)
 			     error_local->message);
 		return FALSE;
 	}
+
 	file2 = g_file_new_for_path (PK_OFFLINE_ACTION_FILENAME);
 	if (g_file_query_exists (file2, NULL) &&
 	    !g_file_delete (file2, NULL, &error_local)) {
@@ -121,6 +122,8 @@ pk_offline_auth_cancel (GError **error)
 			     error_local->message);
 		return FALSE;
 	}
+
+	g_debug ("Offline update cancelled");
 	return TRUE;
 }
 
