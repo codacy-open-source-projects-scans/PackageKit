@@ -1,7 +1,7 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
  * Copyright (C) 2008-2009 Richard Hughes <richard@hughsie.com>
- * Copyright (C) 2024-2025 Matthias Klumpp <matthias@tenstral.net>
+ * Copyright (C) 2024-2026 Matthias Klumpp <matthias@tenstral.net>
  *
  * Licensed under the GNU Lesser General Public License Version 2.1
  *
@@ -31,6 +31,7 @@
 #include <sys/ioctl.h>
 
 #include "pk-progress-bar.h"
+#include "pk-console-private.h"
 
 typedef struct {
 	guint			 position;
@@ -45,7 +46,7 @@ struct PkProgressBarPrivate
 	PkProgressBarPulseState	 pulse_state;
 	gint			 tty_fd;
 	gchar			*old_start_text;
-	guint			 term_width;
+	guint			 area_width;
 	gboolean		 use_unicode;
 
 	gboolean		 allow_restart;
@@ -62,99 +63,12 @@ G_DEFINE_TYPE_WITH_PRIVATE (PkProgressBar, pk_progress_bar, G_TYPE_OBJECT)
 #define GET_PRIVATE(o) (pk_progress_bar_get_instance_private (o))
 
 /**
- * pk_text_truncate:
- * @text: the UTF-8 string to truncate
- * @max_chars: maximum number of characters to keep
+ * pk_progress_bar_get_draw_area_width:
  *
- * Truncate a UTF-8 string to fit within a given character width
- */
-static gchar*
-pk_text_truncate (const gchar *text, guint max_chars)
-{
-	const gchar *p;
-	guint chars = 0;
-
-	if (text == NULL)
-		return g_strdup ("");
-
-	if (max_chars == 0)
-		return g_strdup ("");
-
-	p = text;
-	while (*p != '\0' && chars < max_chars) {
-		const gchar *next = g_utf8_next_char (p);
-		chars++;
-		p = next;
-	}
-
-	if (*p == '\0') {
-		/* String fits completely */
-		return g_strdup (text);
-	} else {
-		/* String needs truncation  */
-		gsize byte_len = p - text;
-
-		/* If we have room for ellipsis, add it */
-		if (max_chars > 3) {
-			gchar *result;
-			guint ellipsis_chars = 0;
-
-			/* Find position for ellipsis (max_chars - 3) */
-			p = text;
-			while (*p != '\0' && ellipsis_chars < max_chars - 3) {
-				p = g_utf8_next_char (p);
-				ellipsis_chars++;
-			}
-
-			byte_len = p - text;
-			result = g_malloc0 (byte_len + 4); /* +3 for "..." +1 for \0 */
-			memcpy (result, text, byte_len);
-			memcpy (result + byte_len, "...", 3);
-
-			return result;
-		}
-
-		/* Not enough room for ellipsis, just truncate */
-		return g_strndup (text, byte_len);
-	}
-}
-
-/**
- * pk_pad_string:
- * @text: the UTF-8 string to pad
- * @width: desired display width in characters
- *
- * Pad a UTF-8 string to exactly the specified display width
- */
-static gchar *
-pk_pad_string (const gchar *text, guint width)
-{
-	guint chars;
-	guint padding_needed;
-	GString *result;
-
-	if (text == NULL)
-		return g_strnfill (width, ' ');
-
-	/* Count actual UTF-8 characters in the string */
-	chars = g_utf8_strlen (text, -1);
-
-	if (chars >= width)
-		return g_strdup (text);
-
-	/* Add padding to reach desired width */
-	padding_needed = width - chars;
-	result = g_string_new (text);
-	g_string_append_printf (result, "%*s", (int)padding_needed, "");
-
-	return g_string_free (result, FALSE);
-}
-
-/**
- * pk_progress_bar_get_terminal_width:
+ * Get our drawing area width in characters.
  */
 static guint
-pk_progress_bar_get_terminal_width (PkProgressBar *self)
+pk_progress_bar_get_draw_area_width (PkProgressBar *self)
 {
 	PkProgressBarPrivate *priv = GET_PRIVATE(self);
 	struct winsize w;
@@ -162,8 +76,10 @@ pk_progress_bar_get_terminal_width (PkProgressBar *self)
 	if (priv->tty_fd < 0)
 		return 80;
 
-	if (ioctl (priv->tty_fd, TIOCGWINSZ, &w) == 0 && w.ws_col > 0)
-		return w.ws_col;
+	if (ioctl (priv->tty_fd, TIOCGWINSZ, &w) == 0 && w.ws_col > 0) {
+		/* we may have very long terminals, so cap the area to a reasonable maximum size */
+		return w.ws_col >= 110 ? 110 : w.ws_col;
+	}
 
 	return 80;
 }
@@ -175,8 +91,8 @@ static void
 pk_progress_bar_console (PkProgressBar *self, const gchar *tmp)
 {
 	PkProgressBarPrivate *priv = GET_PRIVATE(self);
-	gssize count;
-	gssize written;
+	size_t count;
+	ssize_t written;
 
 	if (priv->tty_fd < 0)
 		return;
@@ -186,33 +102,11 @@ pk_progress_bar_console (PkProgressBar *self, const gchar *tmp)
 		return;
 
 	written = write (priv->tty_fd, tmp, count);
-	if (written != count) {
+	if (written < 0 || (size_t)written != count) {
 		g_warning ("Only wrote %" G_GSSIZE_FORMAT
 			   " of %" G_GSSIZE_FORMAT " bytes",
-			   written, count);
+			   written, (gssize)count);
 	}
-}
-
-/**
- * pk_progress_bar_set_padding:
- * @progress_bar: a valid #PkProgressBar instance
- * @padding: minimum size of progress bar text.
- *
- * Set minimum size of progress bar text - it will be padded with spaces to meet this requirement.
- *
- * This function is deprecated as of PackageKit 1.3.3 and has no effect.
- * Since this release, the progress bar text is automatically adjusted to fit the terminal width
- * and the progress bar is right-aligned in the terminal..
- *
- * Return value: %TRUE if changed
- */
-gboolean
-pk_progress_bar_set_padding (PkProgressBar *progress_bar, guint padding)
-{
-	g_return_val_if_fail (PK_IS_PROGRESS_BAR (progress_bar), FALSE);
-	g_return_val_if_fail (padding < 1000, FALSE);
-
-	return TRUE;
 }
 
 /**
@@ -244,7 +138,6 @@ pk_progress_bar_draw (PkProgressBar *self, gint percentage)
 {
 	PkProgressBarPrivate *priv = GET_PRIVATE(self);
 	g_autoptr(GString) str = NULL;
-	guint term_width;
 	guint available_width;
 	guint bar_width;
 	guint text_width;
@@ -264,10 +157,8 @@ pk_progress_bar_draw (PkProgressBar *self, gint percentage)
 	/* move cursor to start of line and clear it */
 	g_string_append (str, "\r\033[K");
 
-	term_width = pk_progress_bar_get_terminal_width (self);
-
 	/* calculate available width for text + bar */
-	available_width = term_width > PK_PERCENT_TEXT_WIDTH ? term_width - PK_PERCENT_TEXT_WIDTH : term_width;
+	available_width = priv->area_width > PK_PERCENT_TEXT_WIDTH ? priv->area_width - PK_PERCENT_TEXT_WIDTH : priv->area_width;
 
 	/* determine bar width (use configured size or auto-calculate) */
 	bar_width = priv->size;
@@ -277,14 +168,17 @@ pk_progress_bar_draw (PkProgressBar *self, gint percentage)
 		bar_width = 10;
 
 	/* text width is what's left */
-	text_width = available_width - bar_width - 3; /* -3 for space and brackets */
+	if (available_width > bar_width + 3)
+		text_width = available_width - bar_width - 3; /* -3 for space and brackets */
+	else
+		text_width = 0;
 
 	/* truncate and pad the current text to exact width */
 	if (priv->old_start_text != NULL && text_width > 0) {
 		g_autofree gchar *truncated = NULL;
 		g_autofree gchar *display_text = NULL;
-		truncated = pk_text_truncate (priv->old_start_text, text_width);
-		display_text = pk_pad_string (truncated, text_width);
+		truncated = pk_console_text_truncate (priv->old_start_text, text_width);
+		display_text = pk_console_strpad (truncated, text_width);
 		g_string_append (str, display_text);
 	} else {
 		gsize old_len = str->len;
@@ -350,7 +244,6 @@ pk_progress_bar_pulse_bar (PkProgressBar *self)
 {
 	PkProgressBarPrivate *priv = GET_PRIVATE(self);
 	g_autoptr(GString) str = NULL;
-	guint term_width;
 	guint available;
 	guint bar_width;
 	guint text_width;
@@ -374,8 +267,7 @@ pk_progress_bar_pulse_bar (PkProgressBar *self)
 	g_string_append (str, "\r\033[K");
 
 	/* calculate dimensions */
-	term_width = pk_progress_bar_get_terminal_width (self);
-	available = term_width > PK_PERCENT_TEXT_WIDTH ? term_width - PK_PERCENT_TEXT_WIDTH : term_width;
+	available = priv->area_width > PK_PERCENT_TEXT_WIDTH ? priv->area_width - PK_PERCENT_TEXT_WIDTH : priv->area_width;
 
 	bar_width = priv->size;
 	if (bar_width > available / 2)
@@ -383,14 +275,17 @@ pk_progress_bar_pulse_bar (PkProgressBar *self)
 	if (bar_width < 10)
 		bar_width = 10;
 
-	text_width = available - bar_width - 3;
+	if (available > bar_width + 3)
+		text_width = available - bar_width - 3;
+	else
+		text_width = 0;
 
 	/* truncate and pad the current text to exact width */
 	if (priv->old_start_text != NULL && text_width > 0) {
 		g_autofree gchar *truncated = NULL;
 		g_autofree gchar *display_text = NULL;
-		truncated = pk_text_truncate (priv->old_start_text, text_width);
-		display_text = pk_pad_string (truncated, text_width);
+		truncated = pk_console_text_truncate (priv->old_start_text, text_width);
+		display_text = pk_console_strpad (truncated, text_width);
 		g_string_append (str, display_text);
 	} else {
 		gsize old_len = str->len;
@@ -508,6 +403,9 @@ pk_progress_bar_start (PkProgressBar *progress_bar, const gchar *text)
 	PkProgressBarPrivate *priv = GET_PRIVATE(progress_bar);
 	g_return_val_if_fail (PK_IS_PROGRESS_BAR (progress_bar), FALSE);
 
+	/* update our drawing area size, in case it has changed */
+	priv->area_width = pk_progress_bar_get_draw_area_width (progress_bar);
+
 	/* same as last time */
 	if (priv->old_start_text != NULL && text != NULL) {
 		if (g_strcmp0 (priv->old_start_text, text) == 0)
@@ -619,7 +517,7 @@ pk_progress_bar_init (PkProgressBar *self)
 	priv->size = PK_PROGRESS_BAR_DEFAULT_SIZE;
 	priv->percentage = G_MININT;
 	priv->timer_id = 0;
-	priv->term_width = 80;
+	priv->area_width = 80;
 
 	/* check if we can use Unicode */
 	codeset = nl_langinfo (CODESET);
@@ -636,7 +534,7 @@ pk_progress_bar_init (PkProgressBar *self)
 
 	/* get initial terminal width */
 	if (priv->tty_fd >= 0)
-		priv->term_width = pk_progress_bar_get_terminal_width (self);
+		priv->area_width = pk_progress_bar_get_draw_area_width (self);
 }
 
 /**
