@@ -65,7 +65,7 @@ pkgc_context_new (void)
 {
 	PkgcliContext *ctx = g_new0 (PkgcliContext, 1);
 
-	ctx->cache_age = -1; /* use default cache age */
+	ctx->cache_age = PKGC_DEFAULT_CACHE_AGE_SEC;
 	ctx->output_mode = PKGCLI_MODE_NORMAL;
 	ctx->exit_code = PKGC_EXIT_SUCCESS;
 	ctx->is_tty = isatty (fileno (stdout));
@@ -242,9 +242,9 @@ pkgc_context_apply_settings (PkgcliContext *ctx)
  */
 void
 pkgc_context_register_command (PkgcliContext *ctx,
-							   const gchar *name,
-							   gint (*handler) (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv),
-							   const gchar *summary)
+				const gchar *name,
+				gint (*handler) (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv),
+				const gchar *summary)
 {
 	PkgcliCommand *cmd;
 
