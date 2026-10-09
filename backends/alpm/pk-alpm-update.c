@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <alpm.h>
@@ -131,8 +130,10 @@ pk_backend_get_update_detail_thread (PkBackendJob *job, GVariant* params, gpoint
 	PkBackendAlpmPrivate *priv = pk_backend_get_user_data (backend);
 	gchar **packages;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) update_details = NULL;
 
 	packages = (gchar**) p;
+	update_details = g_ptr_array_new_with_free_func (g_object_unref);
 
 	/* collect details about updates */
 	for (; *packages != NULL; ++packages) {
@@ -148,6 +149,7 @@ pk_backend_get_update_detail_thread (PkBackendJob *job, GVariant* params, gpoint
 		g_auto(GStrv) urls = NULL;
 		g_autofree gchar *issued = NULL;
 		g_autofree gchar *updated = NULL;
+		g_autoptr(PkUpdateDetail) item = NULL;
 
 		if (pk_backend_job_is_cancelled (job))
 			break;
@@ -188,10 +190,14 @@ pk_backend_get_update_detail_thread (PkBackendJob *job, GVariant* params, gpoint
 				updated = pk_alpm_time_to_iso8601 (installed);
 		}
 
-		pk_backend_job_update_detail (job, *packages, upgrades,
-					      replaces, urls, NULL, NULL,
-					      restart, reason, NULL, state,
-					      issued, updated);
+		/* the update detail object copies all strings, so the local
+		 * copies can be freed right after this */
+		item = pk_update_detail_new_full (*packages, upgrades, replaces,
+						  urls, NULL, NULL, restart,
+						  reason, NULL, state,
+						  issued, updated);
+		g_ptr_array_add (update_details, g_steal_pointer (&item));
+
 		if (upgrades[0]) g_free (upgrades[0]);
 		if (replaces) {
 			for (charptr = replaces; charptr[0]; charptr++)
@@ -200,6 +206,7 @@ pk_backend_get_update_detail_thread (PkBackendJob *job, GVariant* params, gpoint
 		}
 	}
 
+	pk_backend_job_update_details (job, update_details);
 	pk_alpm_finish (job, error);
 }
 
@@ -419,6 +426,7 @@ pk_backend_get_updates_thread (PkBackendJob *job, GVariant* params, gpointer p)
 	int update_count = 0;
 	alpm_list_t *i, *syncdbs;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) packages = NULL;
 	PkBitfield filters = 0;
 	FILE *file;
 	int stored_count;
@@ -443,6 +451,7 @@ pk_backend_get_updates_thread (PkBackendJob *job, GVariant* params, gpointer p)
 	}
 
 	/* find outdated and replacement packages */
+	packages = g_ptr_array_new_with_free_func (g_object_unref);
 	syncdbs = alpm_get_syncdbs (handle);
 	for (i = alpm_db_get_pkgcache (priv->localdb); i != NULL; i = i->next) {
 		PkInfoEnum info = PK_INFO_ENUM_NORMAL;
@@ -466,8 +475,10 @@ pk_backend_get_updates_thread (PkBackendJob *job, GVariant* params, gpointer p)
 			continue;
 
 		update_count++;
-		pk_alpm_pkg_emit (job, upgrade, info);
+		pk_alpm_pkg_stage (packages, upgrade, info);
 	}
+
+	pk_backend_job_packages (job, packages);
 
 	if (g_file_test("/tmp/packagekit-alpm-updates", G_FILE_TEST_EXISTS)) {
 		file = fopen("/tmp/packagekit-alpm-updates", "r");

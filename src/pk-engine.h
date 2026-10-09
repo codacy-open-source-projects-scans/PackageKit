@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __PK_ENGINE_H
@@ -24,20 +23,19 @@
 
 #include <glib-object.h>
 
-#define	PK_DBUS_SERVICE			"org.freedesktop.PackageKit"
-#define	PK_DBUS_PATH			"/org/freedesktop/PackageKit"
-#define	PK_DBUS_INTERFACE		"org.freedesktop.PackageKit"
+#define PK_DBUS_SERVICE	  "org.freedesktop.PackageKit"
+#define PK_DBUS_PATH	  "/org/freedesktop/PackageKit"
+#define PK_DBUS_INTERFACE "org.freedesktop.PackageKit"
 
 G_BEGIN_DECLS
 
-#define PK_TYPE_ENGINE		(pk_engine_get_type ())
+#define PK_TYPE_ENGINE (pk_engine_get_type ())
 G_DECLARE_FINAL_TYPE (PkEngine, pk_engine, PK, ENGINE, GObject)
 
-#define PK_ENGINE_ERROR	(pk_engine_error_quark ())
-#define PK_ENGINE_TYPE_ERROR	(pk_engine_error_get_type ())
+#define PK_ENGINE_ERROR	     (pk_engine_error_quark ())
+#define PK_ENGINE_TYPE_ERROR (pk_engine_error_get_type ())
 
-typedef enum
-{
+typedef enum {
 	PK_ENGINE_ERROR_DENIED,
 	PK_ENGINE_ERROR_INVALID_STATE,
 	PK_ENGINE_ERROR_REFUSED_BY_POLICY,
@@ -48,13 +46,12 @@ typedef enum
 	PK_ENGINE_ERROR_LAST
 } PkEngineError;
 
+GQuark	  pk_engine_error_quark (void);
+GType	  pk_engine_error_get_type (void);
+PkEngine *pk_engine_new (GKeyFile *conf);
 
-GQuark		 pk_engine_error_quark			(void);
-GType		 pk_engine_error_get_type		(void);
-PkEngine	*pk_engine_new				(GKeyFile	*conf);
-
-guint		 pk_engine_get_seconds_idle		(PkEngine	*engine);
-gboolean	 pk_engine_load_backend			(PkEngine	*engine,
-							 GError		**error);
+guint	  pk_engine_get_seconds_idle (PkEngine *engine);
+gboolean  pk_engine_load_backend (PkEngine *engine,
+				  GError  **error);
 
 #endif /* __PK_ENGINE_H */

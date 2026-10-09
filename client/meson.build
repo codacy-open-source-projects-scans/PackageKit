@@ -40,7 +40,7 @@ executable(
   ]
 )
 
-if get_option('man_pages')
+if get_option('man')
   xsltproc = find_program('xsltproc')
   custom_target(
     'pkgcli.1',
@@ -56,8 +56,4 @@ if get_option('man_pages')
     install: true,
     install_dir: join_paths(get_option('datadir'), 'man', 'man1'),
   )
-endif
-
-if get_option('legacy_tools')
-    subdir('pkcon')
 endif

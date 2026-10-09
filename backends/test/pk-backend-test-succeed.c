@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <gmodule.h>
@@ -32,33 +31,29 @@ pk_backend_get_description (PkBackend *backend)
 
 void
 pk_backend_initialize (GKeyFile *conf, PkBackend *backend)
-{
-}
+{}
 
 void
 pk_backend_destroy (PkBackend *backend)
-{
-}
+{}
 
 PkBitfield
 pk_backend_get_groups (PkBackend *backend)
 {
-	return pk_bitfield_from_enums (
-		PK_GROUP_ENUM_ACCESSIBILITY,
-		PK_GROUP_ENUM_GAMES,
-		PK_GROUP_ENUM_SYSTEM,
-		-1);
+	return pk_bitfield_from_enums (PK_GROUP_ENUM_ACCESSIBILITY,
+				       PK_GROUP_ENUM_GAMES,
+				       PK_GROUP_ENUM_SYSTEM,
+				       -1);
 }
 
 PkBitfield
 pk_backend_get_filters (PkBackend *backend)
 {
-	return pk_bitfield_from_enums (
-		PK_FILTER_ENUM_GUI,
-		PK_FILTER_ENUM_INSTALLED,
-		PK_FILTER_ENUM_DEVELOPMENT,
-		PK_FILTER_ENUM_FREE,
-		-1);
+	return pk_bitfield_from_enums (PK_FILTER_ENUM_GUI,
+				       PK_FILTER_ENUM_INSTALLED,
+				       PK_FILTER_ENUM_DEVELOPMENT,
+				       PK_FILTER_ENUM_FREE,
+				       -1);
 }
 
 gchar **
@@ -75,19 +70,20 @@ pk_backend_cancel (PkBackend *backend, PkBackendJob *job)
 }
 
 void
-pk_backend_download_packages (PkBackend *backend, PkBackendJob *job, gchar **package_ids, const gchar *directory)
+pk_backend_download_packages (PkBackend *backend,
+			      PkBackendJob *job,
+			      gchar **package_ids,
+			      const gchar *directory)
 {
 	pk_backend_job_finished (job);
 }
 
 void
-pk_backend_get_categories (PkBackend *backend, PkBackendJob *job)
-{
-	pk_backend_job_finished (job);
-}
-
-void
-pk_backend_depends_on (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids, gboolean recursive)
+pk_backend_depends_on (PkBackend *backend,
+		       PkBackendJob *job,
+		       PkBitfield filters,
+		       gchar **package_ids,
+		       gboolean recursive)
 {
 	pk_backend_job_finished (job);
 }
@@ -123,7 +119,11 @@ pk_backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids
 }
 
 void
-pk_backend_required_by (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids, gboolean recursive)
+pk_backend_required_by (PkBackend *backend,
+			PkBackendJob *job,
+			PkBitfield filters,
+			gchar **package_ids,
+			gboolean recursive)
 {
 	pk_backend_job_finished (job);
 }
@@ -141,20 +141,29 @@ pk_backend_get_updates (PkBackend *backend, PkBackendJob *job, PkBitfield filter
 }
 
 void
-pk_backend_install_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **package_ids)
+pk_backend_install_packages (PkBackend *backend,
+			     PkBackendJob *job,
+			     PkBitfield transaction_flags,
+			     gchar **package_ids)
 {
 	pk_backend_job_finished (job);
 }
 
 void
-pk_backend_install_signature (PkBackend *backend, PkBackendJob *job, PkSigTypeEnum type,
-			   const gchar *key_id, const gchar *package_id)
+pk_backend_install_signature (PkBackend *backend,
+			      PkBackendJob *job,
+			      PkSigTypeEnum type,
+			      const gchar *key_id,
+			      const gchar *package_id)
 {
 	pk_backend_job_finished (job);
 }
 
 void
-pk_backend_install_files (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **full_paths)
+pk_backend_install_files (PkBackend *backend,
+			  PkBackendJob *job,
+			  PkBitfield transaction_flags,
+			  gchar **full_paths)
 {
 	pk_backend_job_finished (job);
 }
@@ -166,7 +175,8 @@ pk_backend_refresh_cache (PkBackend *backend, PkBackendJob *job, gboolean force)
 }
 
 void
-pk_backend_remove_packages (PkBackend *backend, PkBackendJob *job,
+pk_backend_remove_packages (PkBackend *backend,
+			    PkBackendJob *job,
 			    PkBitfield transaction_flags,
 			    gchar **package_ids,
 			    gboolean allow_deps,
@@ -182,7 +192,10 @@ pk_backend_resolve (PkBackend *backend, PkBackendJob *job, PkBitfield filters, g
 }
 
 void
-pk_backend_search_details (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
+pk_backend_search_details (PkBackend *backend,
+			   PkBackendJob *job,
+			   PkBitfield filters,
+			   gchar **values)
 {
 	pk_backend_job_finished (job);
 }
@@ -215,7 +228,10 @@ pk_backend_search_names (PkBackend *backend, PkBackendJob *job, PkBitfield filte
 }
 
 void
-pk_backend_update_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **package_ids)
+pk_backend_update_packages (PkBackend *backend,
+			    PkBackendJob *job,
+			    PkBitfield transaction_flags,
+			    gchar **package_ids)
 {
 	pk_backend_job_finished (job);
 }
@@ -233,7 +249,11 @@ pk_backend_repo_enable (PkBackend *backend, PkBackendJob *job, const gchar *rid,
 }
 
 void
-pk_backend_repo_set_data (PkBackend *backend, PkBackendJob *job, const gchar *rid, const gchar *parameter, const gchar *value)
+pk_backend_repo_set_data (PkBackend *backend,
+			  PkBackendJob *job,
+			  const gchar *rid,
+			  const gchar *parameter,
+			  const gchar *value)
 {
 	pk_backend_job_finished (job);
 }
@@ -251,7 +271,11 @@ pk_backend_get_packages (PkBackend *backend, PkBackendJob *job, PkBitfield filte
 }
 
 void
-pk_backend_upgrade_system (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, const gchar *distro_id, PkUpgradeKindEnum upgrade_kind)
+pk_backend_upgrade_system (PkBackend *backend,
+			   PkBackendJob *job,
+			   PkBitfield transaction_flags,
+			   const gchar *distro_id,
+			   PkUpgradeKindEnum upgrade_kind)
 {
 	pk_backend_job_finished (job);
 }

@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <alpm.h>
@@ -26,7 +25,12 @@
 
 gchar		*pk_alpm_pkg_build_id	(alpm_pkg_t *pkg);
 
+/* Report a single package progress event during a transaction. */
 void		 pk_alpm_pkg_emit (PkBackendJob *job, alpm_pkg_t *pkg, PkInfoEnum info);
+
+/* Append a PkPackage for @pkg to @packages (element-type PkPackage), to be
+ * reported as a query result with pk_backend_job_packages(). */
+void		 pk_alpm_pkg_stage (GPtrArray *packages, alpm_pkg_t *pkg, PkInfoEnum info);
 
 alpm_pkg_t	*pk_alpm_find_pkg (PkBackendJob *job,
 					 const gchar *package_id,

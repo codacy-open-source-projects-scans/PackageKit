@@ -3,7 +3,7 @@ cc = meson.get_compiler('c')
 poldek_dep = cc.find_library('poldek')
 poclidek_dep = cc.find_library('poclidek')
 
-shared_module(
+pk_backend_modules += shared_module(
   'pk_backend_poldek',
   'pk-backend-poldek.c',
   include_directories: packagekit_src_include,
@@ -18,5 +18,5 @@ shared_module(
     '-I/usr/include/poldek'
   ],
   install: true,
-  install_dir: pk_plugin_dir,
+  install_dir: pk_backends_dir,
 )

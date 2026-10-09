@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <alpm.h>
@@ -42,7 +41,7 @@ pk_alpm_list_find_pkgname (const alpm_list_t *pkgs, const gchar *name)
 }
 
 static alpm_list_t *
-pk_alpm_find_provider (PkBackendJob *job, alpm_list_t *pkgs,
+pk_alpm_find_provider (PkBackendJob *job, GPtrArray *packages, alpm_list_t *pkgs,
 		       const gchar *depend, gboolean recursive,
 		       PkBitfield filters, GError **error)
 {
@@ -69,7 +68,7 @@ pk_alpm_find_provider (PkBackendJob *job, alpm_list_t *pkgs,
 
 	if (provider != NULL) {
 		if (!skip_local) {
-			pk_alpm_pkg_emit (job, provider, PK_INFO_ENUM_INSTALLED);
+			pk_alpm_pkg_stage (packages, provider, PK_INFO_ENUM_INSTALLED);
 			/* assume later dependencies will also be local */
 			if (recursive) {
 				pkgs = alpm_list_add (pkgs, provider);
@@ -85,7 +84,7 @@ pk_alpm_find_provider (PkBackendJob *job, alpm_list_t *pkgs,
 
 	if (provider != NULL) {
 		if (!skip_remote)
-			pk_alpm_pkg_emit (job, provider, PK_INFO_ENUM_AVAILABLE);
+			pk_alpm_pkg_stage (packages, provider, PK_INFO_ENUM_AVAILABLE);
 		/* keep looking for local dependencies */
 		if (recursive)
 			pkgs = alpm_list_add (pkgs, provider);
@@ -99,7 +98,7 @@ pk_alpm_find_provider (PkBackendJob *job, alpm_list_t *pkgs,
 }
 
 static alpm_list_t *
-pk_backend_find_requirer (PkBackendJob *job, alpm_list_t *pkgs, const gchar *name, gboolean recursive,
+pk_backend_find_requirer (PkBackendJob *job, GPtrArray *packages, alpm_list_t *pkgs, const gchar *name, gboolean recursive,
 			  GError **error)
 {
 	PkBackend *backend = pk_backend_job_get_backend (job);
@@ -115,7 +114,7 @@ pk_backend_find_requirer (PkBackendJob *job, alpm_list_t *pkgs, const gchar *nam
 	requirer = alpm_db_get_pkg (priv->localdb, name);
 
 	if (requirer != NULL) {
-		pk_alpm_pkg_emit (job, requirer, PK_INFO_ENUM_INSTALLED);
+		pk_alpm_pkg_stage (packages, requirer, PK_INFO_ENUM_INSTALLED);
 		if (recursive)
 			pkgs = alpm_list_add (pkgs, requirer);
 	} else {
@@ -133,11 +132,14 @@ pk_backend_depends_on_thread (PkBackendJob* job, GVariant* params, gpointer p)
 	gchar **packages;
 	alpm_list_t *i, *pkgs = NULL;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) results = NULL;
 	PkBitfield filters;
 	gboolean recursive;
 
 	g_variant_get (params, "(t^a&sb)",
 		       &filters, &packages, &recursive);
+
+	results = g_ptr_array_new_with_free_func (g_object_unref);
 
 	/* construct an initial package list */
 	for (; *packages != NULL; ++packages) {
@@ -168,11 +170,12 @@ pk_backend_depends_on_thread (PkBackendJob* job, GVariant* params, gpointer p)
 				break;
 
 			depend = alpm_dep_compute_string (depends->data);
-			pkgs = pk_alpm_find_provider (job, pkgs, depend, recursive, filters, &error);
+			pkgs = pk_alpm_find_provider (job, results, pkgs, depend, recursive, filters, &error);
 		}
 	}
 
 	alpm_list_free (pkgs);
+	pk_backend_job_packages (job, results);
 }
 
 static void
@@ -181,11 +184,14 @@ pk_backend_required_by_thread (PkBackendJob* job, GVariant* params, gpointer p)
 	gchar **packages;
 	alpm_list_t *i, *pkgs = NULL;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) results = NULL;
 	gboolean recursive;
 	PkBitfield filters;
 
 	g_variant_get (params, "(t^a&sb)",
 		       &filters, &packages, &recursive);
+
+	results = g_ptr_array_new_with_free_func (g_object_unref);
 
 	/* construct an initial package list */
 	for (; *packages != NULL; ++packages) {
@@ -213,7 +219,7 @@ pk_backend_required_by_thread (PkBackendJob* job, GVariant* params, gpointer p)
 			if (pk_backend_job_is_cancelled (job) || error != NULL)
 				break;
 
-			pkgs = pk_backend_find_requirer (job, pkgs,
+			pkgs = pk_backend_find_requirer (job, results, pkgs,
 							 requiredby->data, recursive, &error);
 		}
 
@@ -221,6 +227,7 @@ pk_backend_required_by_thread (PkBackendJob* job, GVariant* params, gpointer p)
 	}
 
 	alpm_list_free (pkgs);
+	pk_backend_job_packages (job, results);
 	pk_alpm_finish (job, error);
 }
 

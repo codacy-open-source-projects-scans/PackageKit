@@ -5,9 +5,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -16,12 +16,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef DEB_FILE_H
 #define DEB_FILE_H
+
+#include <memory>
 
 #include <apt-pkg/debfile.h>
 
@@ -31,7 +32,7 @@ class DebFile
 {
 public:
     DebFile(const string &filename);
-    virtual ~DebFile();
+    ~DebFile() = default;
     bool isValid() const;
 
     string packageName() const;
@@ -48,7 +49,7 @@ public:
     string errorMsg() const;
 
 private:
-    debDebFile::MemControlExtract *m_extractor;
+    std::unique_ptr<debDebFile::MemControlExtract> m_extractor;
     pkgTagSection m_controlData;
     string m_errorMsg;
     std::vector<std::string> m_files;

@@ -1,3 +1,7 @@
+
+subdir('config')
+subdir('policy')
+
 install_data(
   'pk-upgrade-distro.sh',
   install_dir: join_paths(get_option('datadir'), 'PackageKit'),
@@ -72,6 +76,7 @@ ascli_exe = find_program('appstreamcli', required: false)
 if ascli_exe.found()
   test('validate metainfo file',
         ascli_exe,
+        suite: 'validate',
         args: ['validate',
                '--no-net',
                '--pedantic',

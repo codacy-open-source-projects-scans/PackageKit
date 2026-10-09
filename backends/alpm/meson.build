@@ -1,6 +1,6 @@
 alpm_dep = dependency('libalpm', version: '>=15.0.0')
 
-shared_module(
+pk_backend_modules += shared_module(
   'pk_backend_alpm',
   'pk-backend-alpm.c',
   'pk-backend-alpm.h',
@@ -40,7 +40,7 @@ shared_module(
     '-DPK_BACKEND_DEFAULT_PATH="/bin:/usr/bin:/sbin:/usr/sbin"',
   ],
   install: true,
-  install_dir: pk_plugin_dir,
+  install_dir: pk_backends_dir,
 )
 
 install_data(

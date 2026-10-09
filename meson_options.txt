@@ -12,12 +12,9 @@ option('packaging_backend',
     type : 'array',
     choices : ['alpm',
                'apt',
-               'dnf',
                'dnf5',
                'dummy',
-               'entropy',
                'eopkg',
-               'pisi',
                'poldek',
                'portage',
                'zypp',
@@ -38,11 +35,6 @@ option('packagekit_user',
     value : 'root',
     description : 'User for running the PackageKit daemon'
 )
-option('local_checkout',
-    type : 'boolean',
-    value : false,
-    description : 'Allow running in local checkout'
-)
 option('daemon_tests',
     type : 'boolean',
     value : true,
@@ -61,11 +53,6 @@ option('offline_update',
     type : 'boolean',
     value : true,
     description : 'Use systemd offline update'
-)
-option('legacy_tools',
-    type : 'boolean',
-    value : false,
-    description : 'Build the pkcon/pkmon command-line tools'
 )
 option('elogind',
     type : 'boolean',
@@ -112,15 +99,15 @@ option('python_backend',
 # Documentation
 #
 
-option('man_pages',
+option('man',
     type : 'boolean',
     value : true,
     description : 'Generate man pages'
 )
-option('gtk_doc',
+option('docs',
     type : 'boolean',
     value : false,
-    description : 'Generate API reference'
+    description : 'Generate the reference manual'
 )
 
 #

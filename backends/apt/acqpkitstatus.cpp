@@ -2,9 +2,9 @@
  *
  * Copyright (c) 2009 Daniel Nicoletti <dantti@gmail.com>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -13,9 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "acqpkitstatus.h"
@@ -159,7 +157,8 @@ bool AcqPackageKitStatus::Pulse(pkgAcquire *Owner)
 #if APT_PKG_ABI >= 590
         if (I->CurrentItem->TotalSize > 0) {
             updateStatus(
-                *I->CurrentItem, long(double(I->CurrentItem->CurrentSize * 100.0) / double(I->CurrentItem->TotalSize)));
+                *I->CurrentItem,
+                long(double(I->CurrentItem->CurrentSize * 100.0) / double(I->CurrentItem->TotalSize)));
 #else
         if (I->TotalSize > 0) {
             updateStatus(*I->CurrentItem, long(double(I->CurrentSize * 100.0) / double(I->TotalSize)));
@@ -185,12 +184,10 @@ bool AcqPackageKitStatus::Pulse(pkgAcquire *Owner)
 /* Prompt for a media swap */
 bool AcqPackageKitStatus::MediaChange(string Media, string Drive)
 {
-    pk_backend_job_media_change_required(m_job, PK_MEDIA_TYPE_ENUM_DISC, Media.c_str(), Media.c_str());
-
     pk_backend_job_error_code(
         m_job,
-        PK_ERROR_ENUM_MEDIA_CHANGE_REQUIRED,
-        "Media change: please insert the disc labeled '%s' in the drive '%s' and try again.",
+        PK_ERROR_ENUM_REPO_NOT_AVAILABLE,
+        "Media change is not supported: the disc labeled '%s' would be required in the drive '%s'.",
         Media.c_str(),
         Drive.c_str());
 

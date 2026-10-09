@@ -1,3 +1,7 @@
+
+pk_backend_modules = []
+
+subdir('spawn')
 subdir('test')
 
 packaging_backends = get_option('packaging_backend')

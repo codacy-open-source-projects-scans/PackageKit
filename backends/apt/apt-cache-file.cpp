@@ -4,9 +4,9 @@
  * Copyright (c) 2012 Matthias Klumpp <matthias@tenstral.net>
  * Copyright (c) 2016 Harald Sitter <sitter@kde.org>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,14 +15,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "apt-cache-file.h"
 
 #include <sstream>
 #include <cstdio>
+#include <vector>
 #include <apt-pkg/algorithms.h>
 #include <apt-pkg/progress.h>
 #include <apt-pkg/upgrade.h>
@@ -33,8 +32,7 @@
 using namespace APT;
 
 AptCacheFile::AptCacheFile(PkBackendJob *job)
-    : m_packageRecords(0),
-      m_job(job)
+    : m_job(job)
 {
 }
 
@@ -51,9 +49,7 @@ bool AptCacheFile::Open(bool withLock)
 
 void AptCacheFile::Close()
 {
-    delete m_packageRecords;
-
-    m_packageRecords = 0;
+    m_packageRecords.reset();
 
     pkgCacheFile::Close();
 
@@ -147,12 +143,12 @@ void AptCacheFile::ShowBroken(bool Now, PkErrorEnum error)
             Ver = (*this)[I].InstVerIter(*this);
         }
 
-        if (Ver.end() == true) {
+        if (Ver.end()) {
             out << std::endl;
             continue;
         }
 
-        for (pkgCache::DepIterator D = Ver.DependsList(); D.end() == false;) {
+        for (pkgCache::DepIterator D = Ver.DependsList(); !D.end();) {
             // Compute a single dependency element (glob or)
             pkgCache::DepIterator Start;
             pkgCache::DepIterator End;
@@ -207,17 +203,10 @@ void AptCacheFile::ShowBroken(bool Now, PkErrorEnum error)
                         tVer = Targ.CurrentVer();
                     }
 
-                    if (tVer.end() == false) {
-                        char buffer[1024];
-                        if (Now == true) {
-                            sprintf(buffer, "but %s is installed", tVer.VerStr());
-                        } else {
-                            sprintf(buffer, "but %s is to be installed", tVer.VerStr());
-                        }
-
-                        out << buffer;
+                    if (!tVer.end()) {
+                        out << "but " << tVer.VerStr() << (Now ? " is installed" : " is to be installed");
                     } else {
-                        if ((*this)[Targ].CandidateVerIter(*this).end() == true) {
+                        if ((*this)[Targ].CandidateVerIter(*this).end()) {
                             if (Targ->ProvidesList == 0) {
                                 out << "but it is not installable";
                             } else {
@@ -255,7 +244,7 @@ void AptCacheFile::buildPkgRecords()
     }
 
     // Create the text record parser
-    m_packageRecords = new pkgRecords(*this);
+    m_packageRecords = std::make_unique<pkgRecords>(*this);
 }
 
 bool AptCacheFile::isGarbage(const pkgCache::PkgIterator &pkg)
@@ -294,11 +283,8 @@ bool AptCacheFile::doAutomaticRemove()
 
 bool AptCacheFile::isRemovingEssentialPackages()
 {
-    string List;
-    bool *Added = new bool[(*this)->Head().PackageCount];
-    for (unsigned int I = 0; I != (*this)->Head().PackageCount; ++I) {
-        Added[I] = false;
-    }
+    std::string List;
+    std::vector<bool> Added((*this)->Head().PackageCount, false);
 
     for (pkgCache::PkgIterator I = (*this)->PkgBegin(); !I.end(); ++I) {
         if ((I->Flags & pkgCache::Flag::Essential) != pkgCache::Flag::Essential
@@ -306,39 +292,35 @@ bool AptCacheFile::isRemovingEssentialPackages()
             continue;
         }
 
-        if ((*this)[I].Delete() == true) {
-            if (Added[I->ID] == false) {
+        if ((*this)[I].Delete()) {
+            if (!Added[I->ID]) {
                 Added[I->ID] = true;
-                List += string(I.Name()) + " ";
+                List += std::string(I.Name()) + " ";
             }
         }
 
-        if (I->CurrentVer == 0) {
+        if (I->CurrentVer == 0)
             continue;
-        }
 
         // Print out any essential package depenendents that are to be removed
-        for (pkgCache::DepIterator D = I.CurrentVer().DependsList(); D.end() == false; ++D) {
+        for (pkgCache::DepIterator D = I.CurrentVer().DependsList(); !D.end(); ++D) {
             // Skip everything but depends
-            if (D->Type != pkgCache::Dep::PreDepends && D->Type != pkgCache::Dep::Depends) {
+            if (D->Type != pkgCache::Dep::PreDepends && D->Type != pkgCache::Dep::Depends)
                 continue;
-            }
 
             pkgCache::PkgIterator P = D.SmartTargetPkg();
-            if ((*this)[P].Delete() == true) {
-                if (Added[P->ID] == true) {
-                    continue;
-                }
-                Added[P->ID] = true;
+            if (P.end() || P.Name() == nullptr)
+                continue;
+            if (!(*this)[P].Delete())
+                continue;
+            if (Added[P->ID])
+                continue;
+            Added[P->ID] = true;
 
-                char S[300];
-                snprintf(S, sizeof(S), "%s (due to %s) ", P.Name(), I.Name());
-                List += S;
-            }
+            List += std::string(P.Name()) + " (due to " + I.Name() + ") ";
         }
     }
 
-    delete[] Added;
     if (!List.empty()) {
         pk_backend_job_error_code(
             m_job,
@@ -365,14 +347,14 @@ PkgInfo AptCacheFile::resolvePkgID(const gchar *packageId)
 
     // check if any intended action was encoded in this package-ID
     auto piAction = PkgAction::NONE;
-    if (g_str_has_prefix(parts[PK_PACKAGE_ID_DATA], "+auto:"))
+    if (g_strcmp0(parts[PK_PACKAGE_ID_DATA], "+auto") == 0)
         piAction = PkgAction::INSTALL_AUTO;
-    else if (g_str_has_prefix(parts[PK_PACKAGE_ID_DATA], "+manual:"))
+    else if (g_strcmp0(parts[PK_PACKAGE_ID_DATA], "+manual") == 0)
         piAction = PkgAction::INSTALL_MANUAL;
 
     const pkgCache::VerIterator &ver = findVer(pkg);
     // check to see if the provided package isn't virtual too
-    if (ver.end() == false && strcmp(ver.VerStr(), parts[PK_PACKAGE_ID_VERSION]) == 0)
+    if (!ver.end() && strcmp(ver.VerStr(), parts[PK_PACKAGE_ID_VERSION]) == 0)
         return PkgInfo(ver, piAction);
 
     // check to see if the provided package isn't virtual too
@@ -394,20 +376,20 @@ gchar *AptCacheFile::buildPackageId(const pkgCache::VerIterator &ver)
     const bool isInstalled = (pkg->CurrentState == pkgCache::State::Installed && pkg.CurrentVer() == ver);
     const bool isAuto = (State.CandidateVer != 0) && (State.Flags & pkgCache::Flag::Auto);
 
-    // when a package is installed manually, the data part of a package-id is "manual:<repo-id>",
-    // otherwise it is "auto:<repo-id>". Available (not installed) packages have no prefix, unless
-    // a pending installation is marked, in which case we prefix the desired new mode of the installed
-    // package (auto/manual) with a plus sign (+).
-    string data = "";
+    // when a package is installed manually, the data part of a package-id is "manual",
+    // otherwise it is "auto". Available (not installed) packages have no data, unless
+    // a pending installation is marked, in which case we prefix the desired new mode of
+    // the installed package (auto/manual) with a plus sign (+).
+    std::string data = "";
     if (isInstalled) {
-        data = isAuto ? "auto:" : "manual:";
+        data = isAuto ? "auto" : "manual";
     } else {
         if (State.NewInstall())
-            data = isAuto ? "+auto:" : "+manual:";
+            data = isAuto ? "+auto" : "+manual";
     }
-    data += utilBuildPackageOriginId(vf);
+    const auto origin = utilBuildPackageOriginId(vf);
 
-    return pk_package_id_build(ver.ParentPkg().Name(), ver.VerStr(), ver.Arch(), data.c_str());
+    return pk_package_id_build(ver.ParentPkg().Name(), ver.VerStr(), ver.Arch(), origin.c_str(), data.c_str());
 }
 
 pkgCache::VerIterator AptCacheFile::findVer(const pkgCache::PkgIterator &pkg)
@@ -436,17 +418,17 @@ pkgCache::VerIterator AptCacheFile::findCandidateVer(const pkgCache::PkgIterator
 std::string AptCacheFile::getShortDescription(const pkgCache::VerIterator &ver)
 {
     if (ver.end() || ver.FileList().end() || GetPkgRecords() == 0) {
-        return string();
+        return {};
     }
 
     pkgCache::DescIterator di = ver.TranslatedDescription();
     if (di.end()) {
-        return string();
+        return {};
     }
 
     pkgCache::DescFileIterator df = di.FileList();
     if (df.end()) {
-        return string();
+        return {};
     } else {
         return m_packageRecords->Lookup(df).ShortDesc();
     }
@@ -455,17 +437,17 @@ std::string AptCacheFile::getShortDescription(const pkgCache::VerIterator &ver)
 std::string AptCacheFile::getLongDescription(const pkgCache::VerIterator &ver)
 {
     if (ver.end() || ver.FileList().end() || GetPkgRecords() == 0) {
-        return string();
+        return {};
     }
 
     pkgCache::DescIterator di = ver.TranslatedDescription();
     if (di.end()) {
-        return string();
+        return {};
     }
 
     pkgCache::DescFileIterator df = di.FileList();
     if (df.end()) {
-        return string();
+        return {};
     } else {
         return m_packageRecords->Lookup(df).LongDesc();
     }
@@ -564,11 +546,11 @@ std::string AptCacheFile::debParser(std::string descr)
     // Policy page on package descriptions
     // http://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-Description
     unsigned int i;
-    string::size_type nlpos = 0;
+    std::string::size_type nlpos = 0;
 
     nlpos = descr.find('\n');
     // delete first line
-    if (nlpos != string::npos) {
+    if (nlpos != std::string::npos) {
         descr.erase(0, nlpos + 2); // del "\n " too
     }
 
@@ -577,7 +559,7 @@ std::string AptCacheFile::debParser(std::string descr)
     while (nlpos < descr.length()) {
         // find the new line position
         nlpos = descr.find('\n', nlpos);
-        if (nlpos == string::npos) {
+        if (nlpos == std::string::npos) {
             // if it could not find the new line
             // get out of the loop
             break;

@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <alpm.h>
@@ -40,7 +39,7 @@ static gchar *xfercmd = NULL;
 typedef struct
 {
 	 gboolean		 checkspace, color, disabledownloadtimeout, ilovecandy,
-				noprogressbar, totaldl, usesyslog, verbosepkglists, is_check;
+				noprogressbar, prettyprogressbar, totaldl, usesyslog, verbosepkglists, is_check;
 
 	 gchar			*arch, *cleanmethod, *dbpath, *gpgdir, *logfile,
 				*root, *xfercmd;
@@ -156,6 +155,14 @@ pk_alpm_config_set_noprogressbar (PkAlpmConfig *config)
 }
 
 static void
+pk_alpm_config_set_prettyprogressbar (PkAlpmConfig *config)
+{
+	g_return_if_fail (config != NULL);
+
+	config->prettyprogressbar = TRUE;
+}
+
+static void
 pk_alpm_config_set_totaldl (PkAlpmConfig *config)
 {
 	g_return_if_fail (config != NULL);
@@ -192,6 +199,7 @@ static const PkAlpmConfigBoolean pk_alpm_config_boolean_options[] = {
 	{ "DisableDownloadTimeout", pk_alpm_config_set_disabledownloadtimeout },
 	{ "ILoveCandy", pk_alpm_config_set_ilovecandy },
 	{ "NoProgressBar", pk_alpm_config_set_noprogressbar },
+	{ "PrettyProgressBar", pk_alpm_config_set_prettyprogressbar },
 	{ "TotalDownload", pk_alpm_config_set_totaldl },
 	{ "UseSyslog", pk_alpm_config_set_usesyslog },
 	{ "VerbosePkgLists", pk_alpm_config_set_verbosepkglists },
@@ -377,7 +385,7 @@ static const PkAlpmConfigList pk_alpm_config_list_options[] = {
 static alpm_list_t *
 pk_alpm_list_add_words (alpm_list_t *list, const gchar *words)
 {
-	gchar *str;
+	const gchar *str;
 
 	while ((str = strchr (words, ' ')) != NULL) {
 		/* allocate normally */

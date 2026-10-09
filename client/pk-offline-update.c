@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -27,25 +26,26 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <locale.h>
-#include <packagekit-glib2/packagekit.h>
-#include <packagekit-glib2/packagekit-private.h>
-#include <packagekit-glib2/pk-offline-private.h>
+#include <packagekit.h>
+#include <packagekit-private.h>
+#include <pk-offline-private.h>
 #include <stdlib.h>
 #include <unistd.h>
 #ifdef HAVE_SYSTEMD_SD_JOURNAL_H
 #include <systemd/sd-journal.h>
 #else
-#define LOG_INFO STDERR_FILENO
+#define LOG_INFO    STDERR_FILENO
 #define LOG_WARNING STDERR_FILENO
-static int sd_journal_print (int fd, const char* format, ...)
+static int
+sd_journal_print (int fd, const char *format, ...)
 {
 	va_list ap;
 	int ret;
 
-	va_start(ap, format);
-	ret = vdprintf(fd, format, ap);
-	va_end(ap);
-	dprintf(fd, "\n");
+	va_start (ap, format);
+	ret = vdprintf (fd, format, ap);
+	va_end (ap);
+	dprintf (fd, "\n");
 	return (ret);
 }
 #endif
@@ -109,8 +109,7 @@ pk_offline_update_set_plymouth_percentage (guint percentage)
 	cmdargv = g_find_program_in_path ("plymouth");
 	if (cmdargv == NULL)
 		return;
-	cmdline = g_strdup_printf ("plymouth system-update --progress=%i",
-				   percentage);
+	cmdline = g_strdup_printf ("plymouth system-update --progress=%i", percentage);
 	if (!g_spawn_command_line_async (cmdline, &error)) {
 		sd_journal_print (LOG_WARNING,
 				  "failed to set percentage for splash: %s",
@@ -119,9 +118,7 @@ pk_offline_update_set_plymouth_percentage (guint percentage)
 }
 
 static void
-pk_offline_update_progress_cb (PkProgress *progress,
-			       PkProgressType type,
-			       gpointer user_data)
+pk_offline_update_progress_cb (PkProgress *progress, PkProgressType type, gpointer user_data)
 {
 	PkInfoEnum info;
 	PkProgressBar *progressbar = PK_PROGRESS_BAR (user_data);
@@ -141,16 +138,13 @@ pk_offline_update_progress_cb (PkProgress *progress,
 		g_object_get (progress, "package", &pkg, NULL);
 		info = pk_package_get_info (pkg);
 		if (info == PK_INFO_ENUM_UPDATING) {
-			msg = g_strdup_printf ("Updating %s",
-					       pk_package_get_name (pkg));
+			msg = g_strdup_printf ("Updating %s", pk_package_get_name (pkg));
 			pk_progress_bar_start (progressbar, msg);
 		} else if (info == PK_INFO_ENUM_INSTALLING) {
-			msg = g_strdup_printf ("Installing %s",
-					       pk_package_get_name (pkg));
+			msg = g_strdup_printf ("Installing %s", pk_package_get_name (pkg));
 			pk_progress_bar_start (progressbar, msg);
 		} else if (info == PK_INFO_ENUM_REMOVING) {
-			msg = g_strdup_printf ("Removing %s",
-					       pk_package_get_name (pkg));
+			msg = g_strdup_printf ("Removing %s", pk_package_get_name (pkg));
 			pk_progress_bar_start (progressbar, msg);
 		}
 		sd_journal_print (LOG_INFO,
@@ -191,9 +185,7 @@ pk_offline_update_progress_cb (PkProgress *progress,
 		break;
 	case PK_PROGRESS_TYPE_STATUS:
 		g_object_get (progress, "status", &status, NULL);
-		sd_journal_print (LOG_INFO,
-				  "status %s",
-				  pk_status_enum_to_string (status));
+		sd_journal_print (LOG_INFO, "status %s", pk_status_enum_to_string (status));
 	default:
 		break;
 	}
@@ -219,23 +211,20 @@ pk_offline_update_reboot (void)
 				  error->message);
 		return EXIT_FAILURE;
 	}
-	val = g_dbus_connection_call_sync (connection,
-					   "org.freedesktop.systemd1",
-					   "/org/freedesktop/systemd1",
-					   "org.freedesktop.systemd1.Manager",
-					   "StartUnit",
-					   g_variant_new("(ss)",
-							 "reboot.target",
-							 "replace-irreversibly"),
-					   NULL,
-					   G_DBUS_CALL_FLAGS_NONE,
-					   -1,
-					   NULL,
-					   &error);
+	val = g_dbus_connection_call_sync (
+	    connection,
+	    "org.freedesktop.systemd1",
+	    "/org/freedesktop/systemd1",
+	    "org.freedesktop.systemd1.Manager",
+	    "StartUnit",
+	    g_variant_new ("(ss)", "reboot.target", "replace-irreversibly"),
+	    NULL,
+	    G_DBUS_CALL_FLAGS_NONE,
+	    -1,
+	    NULL,
+	    &error);
 	if (val == NULL) {
-		sd_journal_print (LOG_WARNING,
-				  "Failed to reboot: %s",
-				  error->message);
+		sd_journal_print (LOG_WARNING, "Failed to reboot: %s", error->message);
 		return EXIT_FAILURE;
 	}
 
@@ -261,23 +250,20 @@ pk_offline_update_power_off (void)
 				  error->message);
 		return EXIT_FAILURE;
 	}
-	val = g_dbus_connection_call_sync (connection,
-					   "org.freedesktop.systemd1",
-					   "/org/freedesktop/systemd1",
-					   "org.freedesktop.systemd1.Manager",
-					   "StartUnit",
-					   g_variant_new("(ss)",
-							 "poweroff.target",
-							 "replace-irreversibly"),
-					   NULL,
-					   G_DBUS_CALL_FLAGS_NONE,
-					   -1,
-					   NULL,
-					   &error);
+	val = g_dbus_connection_call_sync (
+	    connection,
+	    "org.freedesktop.systemd1",
+	    "/org/freedesktop/systemd1",
+	    "org.freedesktop.systemd1.Manager",
+	    "StartUnit",
+	    g_variant_new ("(ss)", "poweroff.target", "replace-irreversibly"),
+	    NULL,
+	    G_DBUS_CALL_FLAGS_NONE,
+	    -1,
+	    NULL,
+	    &error);
 	if (val == NULL) {
-		sd_journal_print (LOG_WARNING,
-				  "Failed to power off: %s",
-				  error->message);
+		sd_journal_print (LOG_WARNING, "Failed to power off: %s", error->message);
 		return EXIT_FAILURE;
 	}
 
@@ -296,8 +282,10 @@ pk_offline_update_write_error (const GError *error)
 	pk_results_set_exit_code (results, PK_EXIT_ENUM_FAILED);
 	pk_error = pk_error_new ();
 	g_object_set (pk_error,
-		      "code", PK_ERROR_ENUM_FAILED_INITIALIZATION,
-		      "details", error->message,
+		      "code",
+		      PK_ERROR_ENUM_FAILED_INITIALIZATION,
+		      "details",
+		      error->message,
 		      NULL);
 	pk_results_set_error_code (results, pk_error);
 	if (!pk_offline_auth_set_results (results, &error_local))
@@ -335,8 +323,10 @@ pk_offline_update_write_dummy_results (void)
 	pk_results_set_exit_code (results, PK_EXIT_ENUM_FAILED);
 	pk_error = pk_error_new ();
 	g_object_set (pk_error,
-		      "code", PK_ERROR_ENUM_FAILED_INITIALIZATION,
-		      "details", "The transaction did not complete",
+		      "code",
+		      PK_ERROR_ENUM_FAILED_INITIALIZATION,
+		      "details",
+		      "The transaction did not complete",
 		      NULL);
 	pk_results_set_error_code (results, pk_error);
 	if (!pk_offline_auth_set_results (results, &error))
@@ -392,7 +382,7 @@ pk_offline_update_do_update (PkTask *task, PkProgressBar *progressbar, GError **
 			     PK_OFFLINE_ERROR,
 			     PK_OFFLINE_ERROR_FAILED,
 			     "failed to read %s",
-			     PK_OFFLINE_PREPARED_FILENAME);
+			     pk_offline_get_prepared_filename ());
 		return FALSE;
 	}
 
@@ -401,12 +391,12 @@ pk_offline_update_do_update (PkTask *task, PkProgressBar *progressbar, GError **
 	pk_offline_update_set_plymouth_msg (_("Installing updates; this could take a while..."));
 	pk_offline_update_write_dummy_results ();
 	results = pk_client_update_packages (PK_CLIENT (task),
-	                                     0,
-	                                     package_ids,
-	                                     NULL, /* GCancellable */
-	                                     pk_offline_update_progress_cb,
-	                                     progressbar, /* user_data */
-	                                     error);
+					     0,
+					     package_ids,
+					     NULL, /* GCancellable */
+					     pk_offline_update_progress_cb,
+					     progressbar, /* user_data */
+					     error);
 	if (results == NULL) {
 		return FALSE;
 	}
@@ -429,22 +419,23 @@ pk_offline_update_do_upgrade (PkTask *task, PkProgressBar *progressbar, GError *
 			     PK_OFFLINE_ERROR,
 			     PK_OFFLINE_ERROR_FAILED,
 			     "failed to get prepared system upgrade version");
-	        return FALSE;
+		return FALSE;
 	}
 
 	pk_offline_update_set_plymouth_mode ("system-upgrade");
 
-	/* TRANSLATORS: we've started doing offline system upgrade */
-	pk_offline_update_set_plymouth_msg (_("Installing system upgrade; this could take a while..."));
+	pk_offline_update_set_plymouth_msg (
+	    /* TRANSLATORS: we've started doing offline system upgrade */
+	    _("Installing system upgrade; this could take a while..."));
 	pk_offline_update_write_dummy_results ();
 	results = pk_client_upgrade_system (PK_CLIENT (task),
-	                                    0,
-	                                    version,
-	                                    PK_UPGRADE_KIND_ENUM_DEFAULT,
-	                                    NULL, /* GCancellable */
-	                                    pk_offline_update_progress_cb,
-	                                    progressbar, /* user_data */
-	                                    error);
+					    0,
+					    version,
+					    PK_UPGRADE_KIND_ENUM_DEFAULT,
+					    NULL, /* GCancellable */
+					    pk_offline_update_progress_cb,
+					    progressbar, /* user_data */
+					    error);
 	if (results == NULL) {
 		return FALSE;
 	}
@@ -480,16 +471,15 @@ main (int argc, char *argv[])
 	}
 
 	/* verify this is pointing to our cache */
-	link = g_file_read_link (PK_OFFLINE_TRIGGER_FILENAME, NULL);
+	link = g_file_read_link (pk_offline_get_trigger_filename (), NULL);
 	if (link == NULL) {
 		sd_journal_print (LOG_INFO, "no trigger, exiting");
 		retval = EXIT_SUCCESS;
 		goto out;
 	}
-	if (g_strcmp0 (link, PK_OFFLINE_PREPARED_FILENAME) != 0 &&
-	    g_strcmp0 (link, PK_OFFLINE_PREPARED_UPGRADE_FILENAME) != 0 &&
-	    g_strcmp0 (link, "/var/cache/PackageKit") != 0 &&
-	    g_strcmp0 (link, "/var/cache") != 0) {
+	if (g_strcmp0 (link, pk_offline_get_prepared_filename ()) != 0 &&
+	    g_strcmp0 (link, pk_offline_get_prepared_upgrade_filename ()) != 0 &&
+	    g_strcmp0 (link, "/var/cache/PackageKit") != 0 && g_strcmp0 (link, "/var/cache") != 0) {
 		sd_journal_print (LOG_INFO, "another framework set up the trigger");
 		retval = EXIT_SUCCESS;
 		goto out;
@@ -497,10 +487,10 @@ main (int argc, char *argv[])
 
 	/* get the action, and then delete the file */
 	action = pk_offline_update_get_action ();
-	g_unlink (PK_OFFLINE_ACTION_FILENAME);
+	g_unlink (pk_offline_get_action_filename ());
 
 	/* always do this first to avoid a loop if this tool segfaults */
-	g_unlink (PK_OFFLINE_TRIGGER_FILENAME);
+	g_unlink (pk_offline_get_trigger_filename ());
 
 	/* do stuff on ctrl-c */
 	g_unix_signal_add_full (G_PRIORITY_DEFAULT,
@@ -516,8 +506,8 @@ main (int argc, char *argv[])
 	task = pk_task_new ();
 	pk_client_set_interactive (PK_CLIENT (task), FALSE);
 
-	if (g_strcmp0 (link, PK_OFFLINE_PREPARED_UPGRADE_FILENAME) == 0 &&
-	    g_file_test (PK_OFFLINE_PREPARED_UPGRADE_FILENAME, G_FILE_TEST_EXISTS)) {
+	if (g_strcmp0 (link, pk_offline_get_prepared_upgrade_filename ()) == 0 &&
+	    g_file_test (pk_offline_get_prepared_upgrade_filename (), G_FILE_TEST_EXISTS)) {
 		/* do system upgrade */
 		if (!pk_offline_update_do_upgrade (task, progressbar, &error)) {
 			retval = EXIT_FAILURE;
@@ -547,7 +537,7 @@ main (int argc, char *argv[])
 		retval = EXIT_FAILURE;
 		sd_journal_print (LOG_WARNING,
 				  "failed to delete %s: %s",
-				  PK_OFFLINE_PREPARED_FILENAME,
+				  pk_offline_get_prepared_filename (),
 				  error->message);
 		goto out;
 	}

@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -36,11 +35,11 @@
 #include "pk-shared.h"
 
 #ifdef linux
-  #include <sys/syscall.h>
+#include <sys/syscall.h>
 #endif
 
 #ifdef PK_BUILD_DAEMON
-  #include "pk-resources.h"
+#include "pk-resources.h"
 #endif
 
 gboolean
@@ -345,25 +344,36 @@ pk_util_get_config_filename (void)
 {
 	gchar *path;
 
-#if PK_BUILD_LOCAL
-	/* try a local path first */
-	path = g_build_filename ("..", "etc", "PackageKit.conf", NULL);
-	if (g_file_test (path, G_FILE_TEST_EXISTS))
-		goto out;
-	g_debug ("local config file not found '%s'", path);
-	g_free (path);
-#endif
-	/* check the prefix path */
 	path = g_build_filename (SYSCONFDIR, "PackageKit", "PackageKit.conf", NULL);
 	if (g_file_test (path, G_FILE_TEST_EXISTS))
-		goto out;
+		return path;
 
-	/* none found! */
 	g_warning ("config file not found '%s'", path);
 	g_free (path);
-	path = NULL;
-out:
-	return path;
+	return NULL;
+}
+
+/**
+ * pk_util_get_root_dir:
+ * @conf: the daemon configuration
+ *
+ * Returns the directory the daemon treats as "/": the "RootDir" override
+ * from the configuration if present (used to run from a build tree without
+ * touching the state of the host system), otherwise the real root.
+ *
+ * Returns: (transfer full): the directory path
+ */
+gchar *
+pk_util_get_root_dir (GKeyFile *conf)
+{
+	gchar *dir;
+
+	dir = g_key_file_get_string (conf, "Daemon", "RootDir", NULL);
+	if (dir != NULL && dir[0] != '\0')
+		return dir;
+	g_free (dir);
+
+	return g_strdup ("/");
 }
 
 static gint
@@ -379,8 +389,12 @@ pk_util_set_auto_backend (GKeyFile *conf, GError **error)
 	gchar *name_tmp;
 	g_autoptr(GDir) dir = NULL;
 	g_autoptr(GPtrArray) array = NULL;
+	g_autofree gchar *root_dir = NULL;
+	g_autofree gchar *backend_dir = NULL;
 
-	dir = g_dir_open (LIBDIR "/packagekit-backend", 0, error);
+	root_dir = pk_util_get_root_dir (conf);
+	backend_dir = g_build_filename (root_dir, PK_BACKENDS_DIR, NULL);
+	dir = g_dir_open (backend_dir, 0, error);
 	if (dir == NULL)
 		return FALSE;
 	array = g_ptr_array_new_with_free_func (g_free);
@@ -400,13 +414,11 @@ pk_util_set_auto_backend (GKeyFile *conf, GError **error)
 		/* turn 'libpk_backend_test.so' into 'test' */
 		name_tmp = g_strdup (tmp + 14);
 		g_strdelimit (name_tmp, ".", '\0');
-		g_ptr_array_add (array,
-				 name_tmp);
+		g_ptr_array_add (array, name_tmp);
 	} while (1);
 
 	/* need to sort by id predictably */
-	g_ptr_array_sort (array,
-			  (GCompareFunc) pk_util_sort_backends_cb);
+	g_ptr_array_sort (array, (GCompareFunc) pk_util_sort_backends_cb);
 
 	/* set best backend */
 	if (array->len == 0) {
@@ -434,7 +446,7 @@ pk_ioprio_set_idle (GPid pid)
 		IOPRIO_WHO_PGRP,
 		IOPRIO_WHO_USER
 	};
-	#define IOPRIO_CLASS_SHIFT	13
+#define IOPRIO_CLASS_SHIFT 13
 	gint prio = 7;
 	gint class = IOPRIO_CLASS_IDLE << IOPRIO_CLASS_SHIFT;
 	/* FIXME: glibc should have this function */
@@ -462,15 +474,13 @@ pk_string_replace (GString *string, const gchar *search, const gchar *replace)
 
 		/* reallocate the string if required */
 		if (search_len > replace_len) {
-			g_string_erase (string,
-					tmp - string->str,
-					search_len - replace_len);
+			g_string_erase (string, tmp - string->str, search_len - replace_len);
 		}
 		if (search_len < replace_len) {
 			g_string_insert_len (string,
-					    tmp - string->str,
-					    search,
-					    replace_len - search_len);
+					     tmp - string->str,
+					     search,
+					     replace_len - search_len);
 		}
 
 		/* just memcmp in the new string */
@@ -492,7 +502,7 @@ out:
  *
  * Return value: (nullable): the cmdline, or %NULL if it could not be obtained
  **/
-gchar*
+gchar *
 pk_get_cmdline_for_pid (guint32 pid)
 {
 	gboolean ret;

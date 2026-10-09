@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <alpm.h>
@@ -79,17 +78,25 @@ pk_backend_install_files_thread (PkBackendJob *job, GVariant* params, gpointer p
 	gboolean only_trusted;
 	gchar** full_paths;
 	PkBitfield flags;
+	alpm_transflag_t alpm_flags = 0;
 	g_autoptr(GError) error = NULL;
 
 	g_variant_get (params, "(t^a&s)",
 				  &flags,
 				  &full_paths);
-	only_trusted = flags & PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED;
+	only_trusted = pk_bitfield_contain (flags, PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED);
 
 	if (!only_trusted && !pk_alpm_disable_signatures (backend, &error))
 		goto out;
 
-	if (pk_alpm_transaction_initialize (job, 0, NULL, &error) &&
+	/* ONLY_DOWNLOAD must fetch missing dependencies without installing the
+	 * local package or running its scriptlets; libalpm does exactly this
+	 * with ALPM_TRANS_FLAG_DOWNLOADONLY, the same way install_packages does
+	 * in pk-alpm-sync.c. */
+	if (pk_bitfield_contain (flags, PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD))
+		alpm_flags |= ALPM_TRANS_FLAG_DOWNLOADONLY;
+
+	if (pk_alpm_transaction_initialize (job, alpm_flags, NULL, &error) &&
 	    pk_alpm_transaction_add_targets (job, full_paths, &error) &&
 	    pk_alpm_transaction_simulate (job, &error)) {
 		if (pk_bitfield_contain (flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE)) { /* simulation */

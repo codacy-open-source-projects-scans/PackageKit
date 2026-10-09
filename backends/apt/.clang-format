@@ -1,17 +1,48 @@
 ---
 BasedOnStyle: LLVM
 IndentWidth: 4
----
-Language: Cpp
-Standard: C++11
 ColumnLimit: 120
-BreakBeforeBraces: Linux
 PointerAlignment: Right
-AlignAfterOpenBracket: AlwaysBreak
 AllowAllParametersOfDeclarationOnNextLine: false
 AlwaysBreakBeforeMultilineStrings: true
 BreakBeforeBinaryOperators: NonAssignment
 AlignArrayOfStructures: Left
+BreakBeforeBraces: Linux
+
+# never sort includes, only regroup (in rare cases)
+IncludeBlocks: Regroup
+SortIncludes: Never
+
+# Allow arguments to be on their own lines
+AllowAllArgumentsOnNextLine: false
+
+---
+Language: C
+
+# Break after the opening bracket rather than aligning under it.
+# These have to be repeated in every language section: clang-format 22
+# and 23 drop this option family when they inherit it from the language-less
+# section above, which silently turns it back into plain alignment.
+AlignAfterOpenBracket: true
+BreakAfterOpenBracketBracedList: true
+BreakAfterOpenBracketFunction: true
+BreakAfterOpenBracketIf: true
+
+AlwaysBreakAfterReturnType: AllDefinitions
+SpaceBeforeParens: Always
+
+# we abuse this to make clang-format not touch g_auto* macros,
+# as these should not have a space inserted before their open bracket
+WhitespaceSensitiveMacros: ['g_autoptr', 'g_auto', '_', '__attribute__', 'G_DEFINE_QUARK']
+---
+Language: Cpp
+Standard: c++20
+
+BreakBeforeBraces: Linux
+AlignAfterOpenBracket: true
+BreakAfterOpenBracketBracedList: true
+BreakAfterOpenBracketFunction: true
+BreakAfterOpenBracketIf: true
 
 # format C++11 braced lists like function calls
 Cpp11BracedListStyle: true
@@ -76,7 +107,3 @@ AllowShortEnumsOnASingleLine: false
 
 # we want consecutive macros to be aligned
 AlignConsecutiveMacros: true
-
-# never sort includes, only regroup (in rare cases)
-IncludeBlocks: Regroup
-SortIncludes: Never

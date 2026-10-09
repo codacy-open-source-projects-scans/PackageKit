@@ -80,10 +80,9 @@ pkgc_query_on_task_finished_cb (GObject *source_object, GAsyncResult *res, gpoin
 		filelist = pk_files_get_files (files);
 
 		if (ctx->output_mode == PKGCLI_MODE_JSON) {
-			json_t *root;
+			g_autoptr(json_t) root = json_object ();
 			json_t *files_array;
 
-			root = json_object ();
 			files_array = json_array ();
 
 			json_object_set_new (root, "package", json_string (package_id));
@@ -93,7 +92,7 @@ pkgc_query_on_task_finished_cb (GObject *source_object, GAsyncResult *res, gpoin
 
 			json_object_set_new (root, "files", files_array);
 
-			pkgc_print_json_decref (root);
+			pkgc_print_json (root);
 		} else {
 			for (guint j = 0; filelist && filelist[j] != NULL; j++)
 				g_print ("%s\n", filelist[j]);
@@ -154,7 +153,7 @@ pkgc_backend_info (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **ar
 	g_autofree gchar *backend_name = NULL;
 	g_autofree gchar *backend_description = NULL;
 	g_autofree gchar *backend_author = NULL;
-	g_autofree gchar *roles_str;
+	g_autofree gchar *roles_str = NULL;
 	PkBitfield roles = 0;
 
 	/* parse options */
@@ -182,10 +181,9 @@ pkgc_backend_info (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **ar
 	roles_str = pk_role_bitfield_to_string (roles);
 
 	if (ctx->output_mode == PKGCLI_MODE_JSON) {
-		json_t *root;
+		g_autoptr(json_t) root = json_object ();
 		json_t *backend_obj;
 
-		root = json_object ();
 		backend_obj = json_object ();
 
 		json_object_set_new (backend_obj,
@@ -201,7 +199,7 @@ pkgc_backend_info (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **ar
 
 		json_object_set_new (root, "roles", json_string (roles_str));
 
-		pkgc_print_json_decref (root);
+		pkgc_print_json (root);
 	} else {
 		g_print ("%sStatus:%s\n",
 			 pkgc_get_ansi_color (ctx, PKGC_COLOR_BOLD),
@@ -217,7 +215,8 @@ pkgc_backend_info (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **ar
 			pkgc_println (_("Author: %s"), backend_author);
 
 		if (roles_str != NULL) {
-			g_print ("\n"); /* add some extra space before the potentially long roles list */
+			g_print (
+			    "\n"); /* add some extra space before the potentially long roles list */
 			/* TRANSLATORS: List of backend-roles */
 			pkgc_println (_("Roles: %s"), roles_str);
 		}
@@ -434,9 +433,9 @@ pkgc_query_show (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv
 		package_ids = pkgc_resolve_packages (ctx, ctx->filters, argv + 1, &error);
 		if (package_ids == NULL) {
 			if (error) {
-				/* TRANSLATORS: There was an error getting the
-				 * details about the package. The detailed error follows */
 				pkgc_print_error (ctx,
+						  /* TRANSLATORS: There was an error getting the
+						   * details about the package. The detailed error follows */
 						  _("Could not find packages: %s"), error->message);
 			}
 
@@ -470,11 +469,15 @@ pkgc_query_list_depends (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gcha
 	g_autoptr(GOptionContext) option_context = NULL;
 	g_autoptr(GError) error = NULL;
 
+	/* Each option is one record per line; clang-format would put every field
+ * on a line of its own and make the table unreadable. */
+	/* clang-format off */
 	const GOptionEntry options[] = {
 		{ "recursive", 0, G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, &recursive,
 		  _("Check dependencies recursively"), NULL },
 		{ NULL, 0, 0, 0, NULL, NULL, NULL }
 	};
+	/* clang-format on */
 
 	/* parse options */
 	option_context = pkgc_option_context_for_command (
@@ -755,11 +758,15 @@ pkgc_query_list_requiring (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gc
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GOptionContext) option_context = NULL;
 
+	/* Each option is one record per line; clang-format would put every field
+ * on a line of its own and make the table unreadable. */
+	/* clang-format off */
 	const GOptionEntry options[] = {
 		{ "recursive", 0, G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, &recursive,
 		  _("Check dependencies recursively"), NULL },
 		{ NULL, 0, 0, 0, NULL, NULL, NULL }
 	};
+	/* clang-format on */
 
 	/* parse options */
 	option_context = pkgc_option_context_for_command (
@@ -811,7 +818,7 @@ pkgc_query_organization (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gcha
 	    cmd,
 	    NULL,
 	    /* TRANSLATORS: Description for pkgcli organization */
-	    _("List all available filters, groups and categories for package organization."));
+	    _("List all available filters and groups for package organization."));
 	if (!pkgc_parse_command_options (ctx, cmd, option_context, &argc, &argv, 1))
 		return PKGC_EXIT_SYNTAX_ERROR;
 
@@ -836,23 +843,8 @@ pkgc_query_organization (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gcha
 	text = pk_group_bitfield_to_string (groups);
 	g_strdelimit (text, ";", '\n');
 	g_print ("%s\n", text);
-	g_clear_pointer (&text, g_free);
 
-	/* print available categories, if we have any */
-	g_print ("\n");
-	g_print ("%s%s%s\n",
-		 pkgc_get_ansi_color (ctx, PKGC_COLOR_BOLD),
-		 /* TRANSLATORS: Header for list of available package categories */
-		 _("Categories:"), pkgc_get_ansi_color (ctx, PKGC_COLOR_RESET));
-	pk_task_get_categories_async (PK_TASK (ctx->task),
-				      ctx->cancellable,
-				      pkgc_context_on_progress_cb,
-				      ctx,
-				      pkgc_query_on_task_finished_cb,
-				      ctx);
-
-	g_main_loop_run (ctx->loop);
-	return ctx->exit_code;
+	return PKGC_EXIT_SUCCESS;
 }
 
 /**
@@ -898,21 +890,20 @@ pkgc_query_get_time_since_action_cb (GObject *object, GAsyncResult *res, gpointe
 	/* get the results */
 	time_s = pk_control_get_time_since_action_finish (ctx->control, res, &error);
 	if (time_s == 0) {
-		/* TRANSLATORS: we keep a database updated with the time that an
-		 * action was last executed */
 		g_print ("%s: %s\n",
+			 /* TRANSLATORS: we keep a database updated with the time that an
+			  * action was last executed */
 			 _("Failed to get the time since this action was last completed"),
 			   error->message);
 		goto out;
 	}
 
 	if (ctx->output_mode == PKGCLI_MODE_JSON) {
-		json_t *root;
+		g_autoptr(json_t) root = json_object ();
 
-		root = json_object ();
 		json_object_set_new (root, "time_sec", json_integer (time_s));
 
-		pkgc_print_json_decref (root);
+		pkgc_print_json (root);
 	} else {
 		/* TRANSLATORS: this is the time since this role was used */
 		g_print ("%s: %is\n", _("Elapsed time"), time_s);
@@ -949,16 +940,16 @@ pkgc_query_last_time (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar *
 
 	if (value == NULL) {
 		pkgc_print_error (ctx,
-				  /* TRANSLATORS: The user didn't specify what action to use */
 				  "%s",
+				  /* TRANSLATORS: The user didn't specify what action to use */
 				  _("An action, e.g. 'update-packages' is required"));
 		return PKGC_EXIT_FAILURE;
 	}
 	role = pk_role_enum_from_string (value);
 	if (role == PK_ROLE_ENUM_UNKNOWN) {
 		pkgc_print_error (ctx,
-				  /* TRANSLATORS: The user specified an invalid action */
 				  "%s",
+				  /* TRANSLATORS: The user specified an invalid action */
 				  _("A correct role is required"));
 		return PKGC_EXIT_FAILURE;
 	}
@@ -979,107 +970,107 @@ void
 pkgc_register_query_commands (PkgcliContext *ctx)
 {
 	pkgc_context_register_command (
-		ctx,
-		"backend",
-		pkgc_backend_info,
-		/* TRANSLATORS: Description for backend command in pkgcli help */
-		_("Show backend information"));
+	    ctx,
+	    "backend",
+	    pkgc_backend_info,
+	    /* TRANSLATORS: Description for backend command in pkgcli help */
+	    _("Show backend information"));
 
 	pkgc_context_register_command (
-		ctx,
-		"history",
-		pkgc_history,
-		/* TRANSLATORS: Description for history command in pkgcli help */
-		_("Show transaction history"));
+	    ctx,
+	    "history",
+	    pkgc_history,
+	    /* TRANSLATORS: Description for history command in pkgcli help */
+	    _("Show transaction history"));
 
 	pkgc_context_register_command (
-		ctx,
-		"search",
-		pkgc_query_search,
-		/* TRANSLATORS: Description for search command in pkgcli help */
-		_("Search for packages"));
+	    ctx,
+	    "search",
+	    pkgc_query_search,
+	    /* TRANSLATORS: Description for search command in pkgcli help */
+	    _("Search for packages"));
 
 	pkgc_context_register_command (
-		ctx,
-		"list",
-		pkgc_query_list,
-		/* TRANSLATORS: Description for list command in pkgcli help */
-		_("List packages"));
+	    ctx,
+	    "list",
+	    pkgc_query_list,
+	    /* TRANSLATORS: Description for list command in pkgcli help */
+	    _("List packages"));
 
 	pkgc_context_register_command (
-		ctx,
-		"show",
-		pkgc_query_show,
-		/* TRANSLATORS: Description for show command in pkgcli help */
-		_("Show package information"));
+	    ctx,
+	    "show",
+	    pkgc_query_show,
+	    /* TRANSLATORS: Description for show command in pkgcli help */
+	    _("Show package information"));
 
 	pkgc_context_register_command (
-		ctx,
-		"list-depends",
-		pkgc_query_list_depends,
-		/* TRANSLATORS: Description for list-depends command in pkgcli help */
-		_("List dependencies of the specified package(s)"));
+	    ctx,
+	    "list-depends",
+	    pkgc_query_list_depends,
+	    /* TRANSLATORS: Description for list-depends command in pkgcli help */
+	    _("List dependencies of the specified package(s)"));
 
 	pkgc_context_register_command (
-		ctx,
-		"list-requiring",
-		pkgc_query_list_requiring,
-		/* TRANSLATORS: Description for list-requiring command in pkgcli help */
-		_("List other packages requiring the specified package(s)"));
+	    ctx,
+	    "list-requiring",
+	    pkgc_query_list_requiring,
+	    /* TRANSLATORS: Description for list-requiring command in pkgcli help */
+	    _("List other packages requiring the specified package(s)"));
 
 	pkgc_context_register_command (
-		ctx,
-		"what-provides",
-		pkgc_query_what_provides,
-		/* TRANSLATORS: Description for what-provides command in pkgcli help */
-		_("List packages providing a capability"));
+	    ctx,
+	    "what-provides",
+	    pkgc_query_what_provides,
+	    /* TRANSLATORS: Description for what-provides command in pkgcli help */
+	    _("List packages providing a capability"));
 
 	pkgc_context_register_command (
-		ctx,
-		"files",
-		pkgc_query_files,
-		/* TRANSLATORS: Description for files command in pkgcli help */
-		_("Show files in package"));
+	    ctx,
+	    "files",
+	    pkgc_query_files,
+	    /* TRANSLATORS: Description for files command in pkgcli help */
+	    _("Show files in package"));
 
 	pkgc_context_register_command (
-		ctx,
-		"list-updates",
-		pkgc_updates_list_updates,
-		/* TRANSLATORS: Description for list-updates command in pkgcli help */
-		_("Get available updates"));
+	    ctx,
+	    "list-updates",
+	    pkgc_updates_list_updates,
+	    /* TRANSLATORS: Description for list-updates command in pkgcli help */
+	    _("Get available updates"));
 
 	pkgc_context_register_command (
-		ctx,
-		"show-update",
-		pkgc_updates_show_update,
-		/* TRANSLATORS: Description for show-update command in pkgcli help */
-		_("Get update details"));
+	    ctx,
+	    "show-update",
+	    pkgc_updates_show_update,
+	    /* TRANSLATORS: Description for show-update command in pkgcli help */
+	    _("Get update details"));
 
 	pkgc_context_register_command (
-		ctx,
-		"resolve",
-		pkgc_query_resolve,
-		/* TRANSLATORS: Description for resolve command in pkgcli help */
-		_("Resolve package names"));
+	    ctx,
+	    "resolve",
+	    pkgc_query_resolve,
+	    /* TRANSLATORS: Description for resolve command in pkgcli help */
+	    _("Resolve package names"));
 
 	pkgc_context_register_command (
-		ctx,
-		"organization",
-		pkgc_query_organization,
-		/* TRANSLATORS: Description for organization command in pkgcli help */
-		_("List available filters and categories"));
+	    ctx,
+	    "organization",
+	    pkgc_query_organization,
+	    /* TRANSLATORS: Description for organization command in pkgcli help */
+	    _("List available filters and groups"));
 
 	pkgc_context_register_command (
-		ctx,
-		"show-os-upgrade",
-		pkgc_query_show_os_upgrade,
-		/* TRANSLATORS: Description for show-os-upgrade command in pkgcli help */
-		_("Show available distribution upgrades"));
+	    ctx,
+	    "show-os-upgrade",
+	    pkgc_query_show_os_upgrade,
+	    /* TRANSLATORS: Description for show-os-upgrade command in pkgcli help */
+	    _("Show available distribution upgrades"));
 
 	pkgc_context_register_command (
-		ctx,
-		"last-time",
-		pkgc_query_last_time,
-		/* TRANSLATORS: Description for last-time command in pkgcli help */
-		_("Get time since last action"));
+	    ctx,
+	    "last-time",
+	    pkgc_query_last_time,
+	    /* TRANSLATORS: Description for last-time command in pkgcli help */
+	    _("Get time since last action"));
 }

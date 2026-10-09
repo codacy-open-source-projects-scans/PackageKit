@@ -1,4 +1,4 @@
-shared_module(
+pk_backend_modules += shared_module(
   'pk_backend_eopkg',
   'pk-backend-eopkg.c',
   include_directories: packagekit_src_include,
@@ -11,7 +11,7 @@ shared_module(
     '-DG_LOG_DOMAIN="PackageKit-Eopkg"',
   ],
   install: true,
-  install_dir: pk_plugin_dir,
+  install_dir: pk_backends_dir,
 )
 
 install_data(

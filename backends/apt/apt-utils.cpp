@@ -1,11 +1,11 @@
 /* apt-utils.cpp
  *
  * Copyright (c) 2009 Daniel Nicoletti <dantti12@gmail.com>
- * Copyright (c) 2014-2022 Matthias Klumpp <mak@debian.org>
+ * Copyright (c) 2014-2026 Matthias Klumpp <mak@debian.org>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "apt-utils.h"
@@ -33,141 +31,92 @@
 #include <iomanip>
 #include <regex>
 
-PkGroupEnum get_enum_group(string group)
+/* Debian archive sections (https://packages.debian.org/unstable/) mapped
+ * onto PackageKit groups. Sections not listed here (virtual,
+ * debian-installer) are reported as unknown. */
+static const struct {
+    const char *section;
+    PkGroupEnum group;
+} section_groups[] = {
+    {"admin",         PK_GROUP_ENUM_ADMIN          },
+    {"cli-mono",      PK_GROUP_ENUM_PROGRAMMING    },
+    {"comm",          PK_GROUP_ENUM_COMMUNICATION  },
+    {"database",      PK_GROUP_ENUM_DATABASES      },
+    {"debug",         PK_GROUP_ENUM_DEBUG          },
+    {"devel",         PK_GROUP_ENUM_PROGRAMMING    },
+    {"doc",           PK_GROUP_ENUM_DOCUMENTATION  },
+    {"editors",       PK_GROUP_ENUM_EDITORS        },
+    {"education",     PK_GROUP_ENUM_EDUCATION      },
+    {"electronics",   PK_GROUP_ENUM_ELECTRONICS    },
+    {"embedded",      PK_GROUP_ENUM_ELECTRONICS    },
+    {"fonts",         PK_GROUP_ENUM_FONTS          },
+    {"games",         PK_GROUP_ENUM_GAMES          },
+    {"gnome",         PK_GROUP_ENUM_DESKTOP_GNOME  },
+    {"gnu-r",         PK_GROUP_ENUM_PROGRAMMING    },
+    {"gnustep",       PK_GROUP_ENUM_DESKTOP_OTHER  },
+    {"golang",        PK_GROUP_ENUM_LANG_GO        },
+    {"graphics",      PK_GROUP_ENUM_GRAPHICS       },
+    {"hamradio",      PK_GROUP_ENUM_COMMUNICATION  },
+    {"haskell",       PK_GROUP_ENUM_LANG_HASKELL   },
+    {"httpd",         PK_GROUP_ENUM_SERVERS        },
+    {"interpreters",  PK_GROUP_ENUM_PROGRAMMING    },
+    {"introspection", PK_GROUP_ENUM_DEVEL          },
+    {"java",          PK_GROUP_ENUM_LANG_JAVA      },
+    {"javascript",    PK_GROUP_ENUM_LANG_JAVASCRIPT},
+    {"kde",           PK_GROUP_ENUM_DESKTOP_KDE    },
+    {"kernel",        PK_GROUP_ENUM_SYSTEM         },
+    {"libdevel",      PK_GROUP_ENUM_DEVEL          },
+    {"libs",          PK_GROUP_ENUM_LIBRARIES      },
+    {"lisp",          PK_GROUP_ENUM_LANG_LISP      },
+    {"localization",  PK_GROUP_ENUM_LOCALIZATION   },
+    {"mail",          PK_GROUP_ENUM_INTERNET       },
+    {"math",          PK_GROUP_ENUM_SCIENCE        },
+    {"metapackages",  PK_GROUP_ENUM_META           },
+    {"misc",          PK_GROUP_ENUM_OTHER          },
+    {"net",           PK_GROUP_ENUM_NETWORK        },
+    {"news",          PK_GROUP_ENUM_INTERNET       },
+    {"ocaml",         PK_GROUP_ENUM_LANG_OCAML     },
+    {"oldlibs",       PK_GROUP_ENUM_LEGACY         },
+    {"otherosfs",     PK_GROUP_ENUM_VIRTUALIZATION },
+    {"perl",          PK_GROUP_ENUM_LANG_PERL      },
+    {"php",           PK_GROUP_ENUM_LANG_PHP       },
+    {"python",        PK_GROUP_ENUM_LANG_PYTHON    },
+    {"ruby",          PK_GROUP_ENUM_LANG_RUBY      },
+    {"rust",          PK_GROUP_ENUM_LANG_RUST      },
+    {"science",       PK_GROUP_ENUM_SCIENCE        },
+    {"shells",        PK_GROUP_ENUM_SHELLS         },
+    {"sound",         PK_GROUP_ENUM_MULTIMEDIA     },
+    {"tasks",         PK_GROUP_ENUM_META           },
+    {"tex",           PK_GROUP_ENUM_PUBLISHING     },
+    {"text",          PK_GROUP_ENUM_PUBLISHING     },
+    {"utils",         PK_GROUP_ENUM_UTILITIES      },
+    {"vcs",           PK_GROUP_ENUM_PROGRAMMING    },
+    {"video",         PK_GROUP_ENUM_MULTIMEDIA     },
+    {"web",           PK_GROUP_ENUM_INTERNET       },
+    {"x11",           PK_GROUP_ENUM_DESKTOP_OTHER  },
+    {"xfce",          PK_GROUP_ENUM_DESKTOP_OTHER  },
+    {"zope",          PK_GROUP_ENUM_LANG_PYTHON    },
+};
+
+PkGroupEnum get_enum_group(std::string group)
 {
-    if (group.compare("admin") == 0) {
-        return PK_GROUP_ENUM_ADMIN_TOOLS;
-    } else if (group.compare("base") == 0) {
-        return PK_GROUP_ENUM_SYSTEM;
-    } else if (group.compare("cli-mono") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("comm") == 0) {
-        return PK_GROUP_ENUM_COMMUNICATION;
-    } else if (group.compare("database") == 0) {
-        return PK_GROUP_ENUM_ADMIN_TOOLS;
-    } else if (group.compare("debug") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("devel") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("doc") == 0) {
-        return PK_GROUP_ENUM_DOCUMENTATION;
-    } else if (group.compare("editors") == 0) {
-        return PK_GROUP_ENUM_PUBLISHING;
-    } else if (group.compare("education") == 0) {
-        return PK_GROUP_ENUM_EDUCATION;
-    } else if (group.compare("electronics") == 0) {
-        return PK_GROUP_ENUM_ELECTRONICS;
-    } else if (group.compare("embedded") == 0) {
-        return PK_GROUP_ENUM_SYSTEM;
-    } else if (group.compare("fonts") == 0) {
-        return PK_GROUP_ENUM_FONTS;
-    } else if (group.compare("games") == 0) {
-        return PK_GROUP_ENUM_GAMES;
-    } else if (group.compare("gnome") == 0) {
-        return PK_GROUP_ENUM_DESKTOP_GNOME;
-    } else if (group.compare("gnu-r") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("gnustep") == 0) {
-        return PK_GROUP_ENUM_DESKTOP_OTHER;
-    } else if (group.compare("golang") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("graphics") == 0) {
-        return PK_GROUP_ENUM_GRAPHICS;
-    } else if (group.compare("hamradio") == 0) {
-        return PK_GROUP_ENUM_COMMUNICATION;
-    } else if (group.compare("haskell") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("httpd") == 0) {
-        return PK_GROUP_ENUM_SERVERS;
-    } else if (group.compare("interpreters") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("introspection") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("java") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("javascript") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("kde") == 0) {
-        return PK_GROUP_ENUM_DESKTOP_KDE;
-    } else if (group.compare("kernel") == 0) {
-        return PK_GROUP_ENUM_SYSTEM;
-    } else if (group.compare("libdevel") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("libs") == 0) {
-        return PK_GROUP_ENUM_SYSTEM;
-    } else if (group.compare("lisp") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("mail") == 0) {
-        return PK_GROUP_ENUM_INTERNET;
-    } else if (group.compare("math") == 0) {
-        return PK_GROUP_ENUM_SCIENCE;
-    } else if (group.compare("misc") == 0) {
-        return PK_GROUP_ENUM_OTHER;
-    } else if (group.compare("net") == 0) {
-        return PK_GROUP_ENUM_NETWORK;
-    } else if (group.compare("news") == 0) {
-        return PK_GROUP_ENUM_INTERNET;
-    } else if (group.compare("ocaml") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("oldlibs") == 0) {
-        return PK_GROUP_ENUM_LEGACY;
-    } else if (group.compare("otherosfs") == 0) {
-        return PK_GROUP_ENUM_SYSTEM;
-    } else if (group.compare("perl") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("php") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("python") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("ruby") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("rust") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("science") == 0) {
-        return PK_GROUP_ENUM_SCIENCE;
-    } else if (group.compare("shells") == 0) {
-        return PK_GROUP_ENUM_SYSTEM;
-    } else if (group.compare("sound") == 0) {
-        return PK_GROUP_ENUM_MULTIMEDIA;
-    } else if (group.compare("tex") == 0) {
-        return PK_GROUP_ENUM_PUBLISHING;
-    } else if (group.compare("text") == 0) {
-        return PK_GROUP_ENUM_PUBLISHING;
-    } else if (group.compare("utils") == 0) {
-        return PK_GROUP_ENUM_ACCESSORIES;
-    } else if (group.compare("vcs") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("video") == 0) {
-        return PK_GROUP_ENUM_MULTIMEDIA;
-    } else if (group.compare("web") == 0) {
-        return PK_GROUP_ENUM_INTERNET;
-    } else if (group.compare("x11") == 0) {
-        return PK_GROUP_ENUM_DESKTOP_OTHER;
-    } else if (group.compare("xfce") == 0) {
-        return PK_GROUP_ENUM_DESKTOP_XFCE;
-    } else if (group.compare("zope") == 0) {
-        return PK_GROUP_ENUM_PROGRAMMING;
-    } else if (group.compare("alien") == 0) {
-        return PK_GROUP_ENUM_UNKNOWN; // FIXME alien is an unknown group?
-    } else if (group.compare("translations") == 0) {
-        return PK_GROUP_ENUM_LOCALIZATION;
-    } else if (group.compare("metapackages") == 0) {
-        return PK_GROUP_ENUM_COLLECTIONS;
-    } else {
-        return PK_GROUP_ENUM_UNKNOWN;
+    for (const auto &entry : section_groups) {
+        if (group == entry.section)
+            return entry.group;
     }
+    return PK_GROUP_ENUM_UNKNOWN;
 }
 
-string fetchChangelogData(
+std::string fetchChangelogData(
     AptCacheFile &CacheFile,
     pkgAcquire &Fetcher,
     pkgCache::VerIterator Ver,
     pkgCache::VerIterator currver,
-    string *update_text,
-    string *updated,
-    string *issued)
+    std::string *update_text,
+    std::string *updated,
+    std::string *issued)
 {
-    string changelog;
+    std::string changelog;
 
     pkgAcqChangelog *c = new pkgAcqChangelog(&Fetcher, Ver);
 
@@ -179,7 +128,7 @@ string fetchChangelogData(
     pkgRecords Recs(CacheFile);
     pkgCache::PkgIterator Pkg = Ver.ParentPkg();
     pkgRecords::Parser &rec = Recs.Lookup(Ver.FileList());
-    string srcpkg = rec.SourcePkg().empty() ? Pkg.Name() : rec.SourcePkg();
+    std::string srcpkg = rec.SourcePkg().empty() ? Pkg.Name() : rec.SourcePkg();
     changelog = "Changelog for this version is not yet available";
 
     // return empty string if we don't have a file to read
@@ -191,18 +140,18 @@ string fetchChangelogData(
         return changelog;
     }
 
-    ifstream in(c->DestFile.c_str());
-    string line;
-    g_autoptr(GRegex) regexVer = NULL;
+    std::ifstream in(c->DestFile.c_str());
+    std::string line;
+    g_autoptr(GRegex) regexVer = nullptr;
     regexVer = g_regex_new(
         "(?'source'.+) \\((?'version'.*)\\) "
         "(?'dist'.+); urgency=(?'urgency'.+)",
         G_REGEX_CASELESS,
         G_REGEX_MATCH_ANCHORED,
         0);
-    g_autoptr(GRegex) regexDate = NULL;
-    regexDate = g_regex_new(
-        "^ -- (?'maintainer'.+) (?'mail'<.+>)  (?'date'.+)$", G_REGEX_CASELESS, G_REGEX_MATCH_ANCHORED, 0);
+    g_autoptr(GRegex) regexDate = nullptr;
+    regexDate =
+        g_regex_new("^ -- (?'maintainer'.+) (?'mail'<.+>)  (?'date'.+)$", G_REGEX_CASELESS, G_REGEX_MATCH_ANCHORED, 0);
 
     changelog = "";
     while (getline(in, line)) {
@@ -252,8 +201,8 @@ string fetchChangelogData(
             // and when it got updated
             GMatchInfo *match_info;
             if (g_regex_match(regexDate, str, G_REGEX_MATCH_ANCHORED, &match_info)) {
-                const string date = g_match_info_fetch_named(match_info, "date");
-                const string date_iso = changelogDateToIso8601(date);
+                const std::string date = g_match_info_fetch_named(match_info, "date");
+                const std::string date_iso = changelogDateToIso8601(date);
                 if (!date_iso.empty()) {
                     *issued = date_iso;
                     if (updated->empty()) {
@@ -278,110 +227,92 @@ string fetchChangelogData(
     return changelog;
 }
 
-GPtrArray *getCVEUrls(const string &changelog)
+GPtrArray *getCVEUrls(const std::string &changelog)
 {
     GPtrArray *cve_urls = g_ptr_array_new();
 
     // Regular expression to find cve references
-    GRegex *regex;
-    GMatchInfo *match_info;
-    regex = g_regex_new("CVE-\\d{4}-\\d{4,}", G_REGEX_CASELESS, G_REGEX_MATCH_NEWLINE_ANY, 0);
+    g_autoptr(GRegex) regex = g_regex_new("CVE-\\d{4}-\\d{4,}", G_REGEX_CASELESS, G_REGEX_MATCH_NEWLINE_ANY, 0);
+    g_autoptr(GMatchInfo) match_info = nullptr;
     g_regex_match(regex, changelog.c_str(), G_REGEX_MATCH_NEWLINE_ANY, &match_info);
     while (g_match_info_matches(match_info)) {
-        gchar *cve = g_match_info_fetch(match_info, 0);
-        gchar *cveLink;
-
-        cveLink = g_strdup_printf("https://web.nvd.nist.gov/view/vuln/detail?vulnId=%s", cve);
-        g_ptr_array_add(cve_urls, (gpointer)cveLink);
-
-        g_free(cve);
-        g_match_info_next(match_info, NULL);
+        g_autofree gchar *cve = g_match_info_fetch(match_info, 0);
+        g_ptr_array_add(cve_urls, g_strdup_printf("https://web.nvd.nist.gov/view/vuln/detail?vulnId=%s", cve));
+        g_match_info_next(match_info, nullptr);
     }
-    g_match_info_free(match_info);
-    g_regex_unref(regex);
 
     // NULL terminate
-    g_ptr_array_add(cve_urls, NULL);
+    g_ptr_array_add(cve_urls, nullptr);
 
     return cve_urls;
 }
 
-GPtrArray *getBugzillaUrls(const string &changelog)
+GPtrArray *getBugzillaUrls(const std::string &changelog)
 {
     GPtrArray *bugzilla_urls = g_ptr_array_new();
 
     // Matches Ubuntu bugs
-    GRegex *regex;
-    GMatchInfo *match_info;
-    regex = g_regex_new("LP:\\s+(?:[,\\s*]?#(?'bug'\\d+))*", G_REGEX_CASELESS, G_REGEX_MATCH_NEWLINE_ANY, 0);
-    g_regex_match(regex, changelog.c_str(), G_REGEX_MATCH_NEWLINE_ANY, &match_info);
-    while (g_match_info_matches(match_info)) {
-        gchar *bug = g_match_info_fetch_named(match_info, "bug");
-        gchar *bugLink;
-
-        bugLink = g_strdup_printf("https://bugs.launchpad.net/bugs/%s", bug);
-        g_ptr_array_add(bugzilla_urls, (gpointer)bugLink);
-
-        g_free(bug);
-        g_match_info_next(match_info, NULL);
+    {
+        g_autoptr(GRegex)
+            regex = g_regex_new("LP:\\s+(?:[,\\s*]?#(?'bug'\\d+))*", G_REGEX_CASELESS, G_REGEX_MATCH_NEWLINE_ANY, 0);
+        g_autoptr(GMatchInfo) match_info = nullptr;
+        g_regex_match(regex, changelog.c_str(), G_REGEX_MATCH_NEWLINE_ANY, &match_info);
+        while (g_match_info_matches(match_info)) {
+            g_autofree gchar *bug = g_match_info_fetch_named(match_info, "bug");
+            g_ptr_array_add(bugzilla_urls, g_strdup_printf("https://bugs.launchpad.net/bugs/%s", bug));
+            g_match_info_next(match_info, nullptr);
+        }
     }
-    g_match_info_free(match_info);
-    g_regex_unref(regex);
 
     // Debian bugs
     // Regular expressions to detect bug numbers in changelogs according to the
     // Debian Policy Chapter 4.4. For details see the footnote 15:
     // https://www.debian.org/doc/debian-policy/footnotes.html#f15
     // /closes:\s*(?:bug)?\#?\s?\d+(?:,\s*(?:bug)?\#?\s?\d+)*/i
-    regex = g_regex_new(
-        "closes:\\s*(?:bug)?\\#?\\s?(?'bug1'\\d+)(?:,\\s*(?:bug)?\\#?\\s?(?'bug2'\\d+))*",
-        G_REGEX_CASELESS,
-        G_REGEX_MATCH_NEWLINE_ANY,
-        0);
-    g_regex_match(regex, changelog.c_str(), G_REGEX_MATCH_NEWLINE_ANY, &match_info);
-    while (g_match_info_matches(match_info)) {
-        gchar *bug1 = g_match_info_fetch_named(match_info, "bug1");
-        gchar *bugLink1;
+    {
+        g_autoptr(GRegex) regex = g_regex_new(
+            "closes:\\s*(?:bug)?\\#?\\s?(?'bug1'\\d+)(?:,\\s*(?:bug)?\\#?\\s?(?'bug2'\\d+))*",
+            G_REGEX_CASELESS,
+            G_REGEX_MATCH_NEWLINE_ANY,
+            0);
+        g_autoptr(GMatchInfo) match_info = nullptr;
+        g_regex_match(regex, changelog.c_str(), G_REGEX_MATCH_NEWLINE_ANY, &match_info);
+        while (g_match_info_matches(match_info)) {
+            g_autofree gchar *bug1 = g_match_info_fetch_named(match_info, "bug1");
+            g_ptr_array_add(
+                bugzilla_urls,
+                g_strdup_printf("https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=%s", bug1));
 
-        bugLink1 = g_strdup_printf("https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=%s", bug1);
-        g_ptr_array_add(bugzilla_urls, (gpointer)bugLink1);
+            g_autofree gchar *bug2 = g_match_info_fetch_named(match_info, "bug2");
+            if (bug2 != nullptr && bug2[0] != '\0') {
+                g_ptr_array_add(
+                    bugzilla_urls,
+                    g_strdup_printf("https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=%s", bug2));
+            }
 
-        g_free(bug1);
-
-        gchar *bug2 = g_match_info_fetch_named(match_info, "bug2");
-        if (bug2 != NULL && bug2[0] != '\0') {
-            gchar *bugLink2;
-
-            bugLink2 = g_strdup_printf("https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=%s", bug2);
-            g_ptr_array_add(bugzilla_urls, (gpointer)bugLink2);
-
-            g_free(bug2);
+            g_match_info_next(match_info, nullptr);
         }
-
-        g_match_info_next(match_info, NULL);
     }
-    g_match_info_free(match_info);
-    g_regex_unref(regex);
 
     // NULL terminate
-    g_ptr_array_add(bugzilla_urls, NULL);
+    g_ptr_array_add(bugzilla_urls, nullptr);
 
     return bugzilla_urls;
 }
 
-bool ends_with(const string &str, const char *end)
+bool ends_with(const std::string &str, const char *end)
 {
     size_t endSize = strlen(end);
     return str.size() >= endSize && (memcmp(str.data() + str.size() - endSize, end, endSize) == 0);
 }
 
-bool starts_with(const string &str, const char *start)
+bool starts_with(const std::string &str, const char *start)
 {
     size_t startSize = strlen(start);
     return str.size() >= startSize && (strncmp(str.data(), start, startSize) == 0);
 }
 
-bool utilRestartRequired(const string &packageName)
+bool utilRestartRequired(const std::string &packageName)
 {
     if (starts_with(packageName, "linux-image-") || starts_with(packageName, "nvidia-") || packageName == "libc6"
         || packageName == "dbus" || packageName == "dbus-broker") {
@@ -390,28 +321,28 @@ bool utilRestartRequired(const string &packageName)
     return false;
 }
 
-string utilBuildPackageOriginId(pkgCache::VerFileIterator vf)
+std::string utilBuildPackageOriginId(pkgCache::VerFileIterator vf)
 {
     if (vf.File().Origin() == nullptr)
-        return string("local");
+        return std::string("local");
     if (vf.File().Archive() == nullptr)
-        return string("local");
+        return std::string("local");
     if (vf.File().Component() == nullptr)
-        return string("invalid");
+        return std::string("invalid");
 
     // https://wiki.debian.org/DebianRepository/Format
     // Optional field indicating the origin of the repository, a single line of free form text.
     // e.g. "Debian" or "Google Inc."
-    auto origin = string(vf.File().Origin());
+    auto origin = std::string(vf.File().Origin());
     // The Suite field may describe the suite. A suite is a single word.
     // e.g. "jessie" or "sid"
-    auto suite = string(vf.File().Archive());
+    auto suite = std::string(vf.File().Archive());
     // An area within the repository. May be prefixed by parts of the path
     // following the directory beneath dists.
     // e.g. "main" or "non-free"
     // NOTE: this may need the slash stripped, currently having a slash doesn't
     //    seem a problem though. we'll allow them until otherwise indicated
-    auto component = string(vf.File().Component());
+    auto component = std::string(vf.File().Component());
 
     // Origin is defined as 'a single line of free form text'.
     // Sanitize it!
@@ -423,26 +354,26 @@ string utilBuildPackageOriginId(pkgCache::VerFileIterator vf)
     std::transform(origin.begin(), origin.end(), origin.begin(), ::tolower);
     origin = std::regex_replace(origin, std::regex("[[:space:][:cntrl:][:punct:]]+"), "_");
 
-    string res = origin + "-" + suite + "-" + component;
+    std::string res = origin + "-" + suite + "-" + component;
     return res;
 }
 
 const char *toUtf8(const char *str)
 {
-    static __thread char *_str = NULL;
-    if (str == NULL)
-        return NULL;
+    static __thread char *_str = nullptr;
+    if (str == nullptr)
+        return nullptr;
 
-    if (g_utf8_validate(str, -1, NULL) == true)
+    if (g_utf8_validate(str, -1, nullptr) == true)
         return str;
 
     g_free(_str);
-    _str = NULL;
-    _str = g_locale_to_utf8(str, -1, NULL, NULL, NULL);
+    _str = nullptr;
+    _str = g_locale_to_utf8(str, -1, nullptr, nullptr, nullptr);
     return _str;
 }
 
-string changelogDateToIso8601(const string &date)
+std::string changelogDateToIso8601(const std::string &date)
 {
     if (date.empty()) {
         return {};
@@ -451,25 +382,25 @@ string changelogDateToIso8601(const string &date)
     std::istringstream date_ss(date);
     date_ss.imbue(std::locale("C")); // Dates are always in English locale
     tm time = {};
-    date_ss >> get_time(&time, "%a, %d %b %Y %H:%M:%S ");
+    date_ss >> std::get_time(&time, "%a, %d %b %Y %H:%M:%S ");
     if (date_ss.fail()) {
         return {};
     }
 
     // Timezone is not parsed by get_time(), so it remains at the end of the stream
-    string tz_str;
+    std::string tz_str;
     date_ss >> tz_str;
     g_autoptr(GTimeZone) tz = g_time_zone_new_identifier(tz_str.c_str());
     if (!tz) {
         tz = g_time_zone_new_utc();
     }
 
-    g_autoptr(GDateTime) dateTime = g_date_time_new(
-        tz, time.tm_year + 1900, time.tm_mon + 1, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+    g_autoptr(GDateTime) dateTime =
+        g_date_time_new(tz, time.tm_year + 1900, time.tm_mon + 1, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
 
-    if (dateTime == NULL) {
+    if (dateTime == nullptr) {
         return {};
     }
 
-    return string(g_date_time_format_iso8601(dateTime));
+    return {g_date_time_format_iso8601(dateTime)};
 }

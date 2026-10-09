@@ -1,12 +1,13 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
- * Copyright (C) 2012 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2012-2021 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016-2026 Matthias Klumpp <matthias@tenstral.net>
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -24,7 +24,7 @@
 #include <glib.h>
 #include <glib/gprintf.h>
 
-#include <packagekit-glib2/pk-results.h>
+#include <pk-results.h>
 
 #include "pk-backend.h"
 #include "pk-backend-job.h"
@@ -37,7 +37,7 @@
  * If backends do not do this, they will be Finished() manually,
  * and a Message() will be sent to warn the developer
  */
-#define PK_BACKEND_FINISHED_ERROR_TIMEOUT	2000 /* ms */
+#define PK_BACKEND_FINISHED_ERROR_TIMEOUT 2000 /* ms */
 
 /**
  * PK_BACKEND_FINISHED_TIMEOUT_GRACE:
@@ -47,7 +47,7 @@
  * This delay is required as some threads may take some time to cancel or a
  * spawned executable to disappear of the system bus.
  */
-#define PK_BACKEND_FINISHED_TIMEOUT_GRACE	10 /* ms */
+#define PK_BACKEND_FINISHED_TIMEOUT_GRACE 10 /* ms */
 
 /**
  * PK_BACKEND_CANCEL_ACTION_TIMEOUT:
@@ -56,58 +56,59 @@
  * us. This means the backend will still be running, but results will not be
  * sent over the dbus interface.
  */
-#define PK_BACKEND_CANCEL_ACTION_TIMEOUT	2000 /* ms */
+#define PK_BACKEND_CANCEL_ACTION_TIMEOUT 2000 /* ms */
 
-typedef struct {
-	gboolean		 enabled;
-	PkBackendJobVFunc	 vfunc;
-	gpointer		 user_data;
+typedef struct
+{
+	gboolean enabled;
+	PkBackendJobVFunc vfunc;
+	gpointer user_data;
 } PkBackendJobVFuncItem;
 
 struct _PkBackendJob
 {
-	GObject			 parent;
+	GObject parent;
 
-	gboolean		 finished;
-	gboolean		 has_sent_package;
-	gboolean		 set_error;
-	gboolean		 set_eula;
-	gboolean		 set_signature;
-	gchar			*cmdline;
-	gchar			*frontend_socket;
-	gchar			*locale;
-	gchar			*no_proxy;
-	gchar			*pac;
-	gchar			*proxy_ftp;
-	gchar			*proxy_http;
-	gchar			*proxy_https;
-	gchar			*proxy_socks;
-	gpointer		 user_data;
-	guint64			 download_size_remaining;
-	guint			 cache_age;
-	guint			 download_files;
-	guint			 percentage;
-	guint			 remaining;
-	guint			 speed;
-	guint			 uid;
-	GVariant		*params;
-	GCancellable		*cancellable;
-	PkBackend		*backend;
-	PkBackendJobVFuncItem	 vfunc_items[PK_BACKEND_SIGNAL_LAST];
-	PkBitfield		 transaction_flags;
-	GKeyFile		*conf;
-	PkExitEnum		 exit;
-	gboolean		 allow_cancel;
-	gboolean		 background;
-	gboolean		 interactive;
-	gboolean		 details_with_deps_size;
-	gboolean		 locked;
-	GHashTable		*emitted;
-	PkErrorEnum		 last_error_code;
-	PkRoleEnum		 role;
-	PkStatusEnum		 status;
-	GTimer			*timer;
-	gboolean		 started;
+	gboolean finished;
+	gboolean has_sent_package;
+	gboolean set_error;
+	gboolean set_eula;
+	gboolean set_signature;
+	gchar *cmdline;
+	gchar *frontend_socket;
+	gchar *locale;
+	gchar *no_proxy;
+	gchar *pac;
+	gchar *proxy_ftp;
+	gchar *proxy_http;
+	gchar *proxy_https;
+	gchar *proxy_socks;
+	gpointer user_data;
+	guint64 download_size_remaining;
+	guint cache_age;
+	guint download_files;
+	guint percentage;
+	guint remaining;
+	guint speed;
+	guint uid;
+	GVariant *params;
+	GCancellable *cancellable;
+	PkBackend *backend;
+	PkBackendJobVFuncItem vfunc_items[PK_BACKEND_SIGNAL_LAST];
+	PkBitfield transaction_flags;
+	GKeyFile *conf;
+	PkExitEnum exit;
+	gboolean allow_cancel;
+	gboolean background;
+	gboolean interactive;
+	gboolean details_with_deps_size;
+	gboolean locked;
+	GHashTable *emitted;
+	PkErrorEnum last_error_code;
+	PkRoleEnum role;
+	PkStatusEnum status;
+	GTimer *timer;
+	gboolean started;
 };
 
 G_DEFINE_TYPE (PkBackendJob, pk_backend_job, G_TYPE_OBJECT)
@@ -130,8 +131,7 @@ pk_backend_job_disconnect_vfuncs (PkBackendJob *job)
 }
 
 gboolean
-pk_backend_job_get_vfunc_enabled (PkBackendJob *job,
-				  PkBackendJobSignal signal_kind)
+pk_backend_job_get_vfunc_enabled (PkBackendJob *job, PkBackendJobSignal signal_kind)
 {
 	PkBackendJobVFuncItem *item;
 
@@ -213,10 +213,8 @@ pk_backend_job_get_transaction_flags (PkBackendJob *job)
 	return job->transaction_flags;
 }
 
-
 void
-pk_backend_job_set_transaction_flags (PkBackendJob *job,
-				      PkBitfield transaction_flags)
+pk_backend_job_set_transaction_flags (PkBackendJob *job, PkBitfield transaction_flags)
 {
 	g_return_if_fail (PK_IS_BACKEND_JOB (job));
 
@@ -365,7 +363,6 @@ pk_backend_job_get_uid (PkBackendJob *job)
 
 	return job->uid;
 }
-
 
 /**
  * pk_backend_job_get_locale:
@@ -571,11 +568,12 @@ pk_backend_job_get_is_error_set (PkBackendJob *job)
 }
 
 /* used to call vfuncs in the main daemon thread */
-typedef struct {
-	PkBackendJob		*job;
-	PkBackendJobSignal	 signal_kind;
-	GObject			*object;
-	GDestroyNotify		 destroy_func;
+typedef struct
+{
+	PkBackendJob *job;
+	PkBackendJobSignal signal_kind;
+	GObject *object;
+	GDestroyNotify destroy_func;
 } PkBackendJobVFuncHelper;
 
 static const gchar *
@@ -611,20 +609,14 @@ pk_backend_job_signal_to_string (PkBackendJobSignal id)
 		return "RepoSignatureRequired";
 	if (id == PK_BACKEND_SIGNAL_EULA_REQUIRED)
 		return "EulaRequired";
-	if (id == PK_BACKEND_SIGNAL_MEDIA_CHANGE_REQUIRED)
-		return "MediaChangeRequired";
 	if (id == PK_BACKEND_SIGNAL_REQUIRE_RESTART)
 		return "RequireRestart";
 	if (id == PK_BACKEND_SIGNAL_STATUS_CHANGED)
 		return "StatusChanged";
 	if (id == PK_BACKEND_SIGNAL_LOCKED_CHANGED)
 		return "LockedChanged";
-	if (id == PK_BACKEND_SIGNAL_UPDATE_DETAIL)
-		return "UpdateDetail";
 	if (id == PK_BACKEND_SIGNAL_UPDATE_DETAILS)
 		return "UpdateDetails";
-	if (id == PK_BACKEND_SIGNAL_CATEGORY)
-		return "Category";
 	return NULL;
 }
 
@@ -725,8 +717,7 @@ void
 pk_backend_job_set_role (PkBackendJob *job, PkRoleEnum role)
 {
 	/* Should only be called once... */
-	if (job->role != PK_ROLE_ENUM_UNKNOWN &&
-	    job->role != role) {
+	if (job->role != PK_ROLE_ENUM_UNKNOWN && job->role != role) {
 		g_warning ("cannot set role to %s, already %s",
 			   pk_role_enum_to_string (role),
 			   pk_role_enum_to_string (job->role));
@@ -767,12 +758,13 @@ pk_backend_job_get_locked (PkBackendJob *job)
 }
 
 /* simple helper to work around the GThread one pointer limit */
-typedef struct {
-	PkBackend		*backend;
-	PkBackendJob		*job;
-	PkBackendJobThreadFunc	 func;
-	gpointer		 user_data;
-	GDestroyNotify		 destroy_func;
+typedef struct
+{
+	PkBackend *backend;
+	PkBackendJob *job;
+	PkBackendJobThreadFunc func;
+	gpointer user_data;
+	GDestroyNotify destroy_func;
 } PkBackendJobThreadHelper;
 
 static gpointer
@@ -830,9 +822,7 @@ pk_backend_job_thread_create (PkBackendJob *job,
 
 	/* create a thread and unref it immediately as we do not need to join()
 	 * this at any stage */
-	g_thread_unref (g_thread_new ("PK-Backend",
-	                              pk_backend_job_thread_setup,
-	                              helper));
+	g_thread_unref (g_thread_new ("PK-Backend", pk_backend_job_thread_setup, helper));
 	return TRUE;
 }
 
@@ -858,11 +848,10 @@ pk_backend_job_set_percentage (PkBackendJob *job, guint percentage)
 	}
 
 	/* check under */
-	if (percentage < 100 &&
-	    job->percentage < 100 &&
-	    percentage < job->percentage) {
+	if (percentage < 100 && job->percentage < 100 && percentage < job->percentage) {
 		g_warning ("percentage value is going down to %i from %i",
-			   percentage, job->percentage);
+			   percentage,
+			   job->percentage);
 		return;
 	}
 
@@ -891,10 +880,7 @@ pk_backend_job_set_speed (PkBackendJob *job, guint speed)
 
 	/* set new value */
 	job->speed = speed;
-	pk_backend_job_call_vfunc (job,
-				   PK_BACKEND_SIGNAL_SPEED,
-				   GUINT_TO_POINTER (speed),
-				   NULL);
+	pk_backend_job_call_vfunc (job, PK_BACKEND_SIGNAL_SPEED, GUINT_TO_POINTER (speed), NULL);
 }
 
 void
@@ -919,10 +905,7 @@ pk_backend_job_set_download_size_remaining (PkBackendJob *job, guint64 download_
 	/* we can't squash a 64bit value into a pointer on a 32bit arch */
 	tmp = g_new0 (guint64, 1);
 	*tmp = download_size_remaining;
-	pk_backend_job_call_vfunc (job,
-				   PK_BACKEND_SIGNAL_DOWNLOAD_SIZE_REMAINING,
-				   tmp,
-				   g_free);
+	pk_backend_job_call_vfunc (job, PK_BACKEND_SIGNAL_DOWNLOAD_SIZE_REMAINING, tmp, g_free);
 }
 
 void
@@ -948,9 +931,12 @@ pk_backend_job_set_item_progress (PkBackendJob *job,
 
 	/* emit */
 	item = g_object_new (PK_TYPE_ITEM_PROGRESS,
-			     "package-id", package_id,
-			     "status", status,
-			     "percentage", percentage,
+			     "package-id",
+			     package_id,
+			     "status",
+			     status,
+			     "percentage",
+			     percentage,
 			     NULL);
 	pk_backend_job_call_vfunc (job,
 				   PK_BACKEND_SIGNAL_ITEM_PROGRESS,
@@ -970,8 +956,7 @@ pk_backend_job_set_status (PkBackendJob *job, PkStatusEnum status)
 
 	/* have we already set an error? */
 	if (job->set_error && status != PK_STATUS_ENUM_FINISHED) {
-		g_warning ("already set error: status %s",
-			   pk_status_enum_to_string (status));
+		g_warning ("already set error: status %s", pk_status_enum_to_string (status));
 		return;
 	}
 
@@ -995,8 +980,7 @@ pk_backend_job_set_status (PkBackendJob *job, PkStatusEnum status)
 	job->status = status;
 
 	/* don't emit some states when simulating */
-	if (pk_bitfield_contain (job->transaction_flags,
-				 PK_TRANSACTION_FLAG_ENUM_SIMULATE)) {
+	if (pk_bitfield_contain (job->transaction_flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE)) {
 		switch (status) {
 		case PK_STATUS_ENUM_DOWNLOAD:
 		case PK_STATUS_ENUM_UPDATE:
@@ -1017,24 +1001,129 @@ pk_backend_job_set_status (PkBackendJob *job, PkStatusEnum status)
 				   NULL);
 }
 
-void
-pk_backend_job_package (PkBackendJob *job,
-			PkInfoEnum info,
-			const gchar *package_id,
-			const gchar *summary)
+/**
+ * pk_backend_packages_add:
+ * @packages: (element-type PkPackage): an array, to be reported with %pk_backend_job_packages()
+ * @info: the #PkInfoEnum of the package
+ * @package_id: the package-id
+ * @summary: (nullable): the one-line package summary
+ * @update_severity: the update severity, or %PK_INFO_ENUM_UNKNOWN
+ *
+ * Adds a package to @packages. Packages with an invalid @package_id are
+ * skipped with a warning.
+ *
+ * Returns: (transfer none) (nullable): the staged package, owned by
+ *   @packages, or %NULL if @package_id is not valid
+ **/
+PkPackage *
+pk_backend_packages_add (GPtrArray *packages,
+			 PkInfoEnum info,
+			 const gchar *package_id,
+			 const gchar *summary,
+			 PkInfoEnum update_severity)
 {
-	pk_backend_job_package_full (job, info, package_id, summary, PK_INFO_ENUM_UNKNOWN);
+	g_autoptr(GError) error = NULL;
+	PkPackage *package;
+
+	g_return_val_if_fail (packages != NULL, NULL);
+	g_return_val_if_fail (package_id != NULL, NULL);
+
+	package = pk_package_new_full (info, package_id, summary, update_severity, &error);
+	if (package == NULL) {
+		g_warning ("package_id %s invalid and cannot be processed: %s",
+			   package_id,
+			   error->message);
+		return NULL;
+	}
+	g_ptr_array_add (packages, package);
+
+	return package;
 }
 
+/**
+ * pk_backend_job_packages:
+ * @job: A #PkBackendJob instance.
+ * @packages: (element-type PkPackage): The packages.
+ *
+ * Report a set of packages, e.g. the results of a query. The array is copied,
+ * so the caller may free or reuse it right away.
+ */
 void
-pk_backend_job_package_full (PkBackendJob *job,
-			     PkInfoEnum info,
-			     const gchar *package_id,
-			     const gchar *summary,
-			     PkInfoEnum update_severity)
+pk_backend_job_packages (PkBackendJob *job, GPtrArray *packages)
+{
+	g_autoptr(GPtrArray) to_emit = NULL;
+
+	g_return_if_fail (PK_IS_BACKEND_JOB (job));
+	g_return_if_fail (packages != NULL);
+
+	/* have we already set an error? */
+	if (job->set_error) {
+		g_warning ("already set error: packages");
+		return;
+	}
+
+	/* the job is asynchronous, so the packages are copied into an array
+	 * owned by the emission itself */
+	to_emit = g_ptr_array_new_full (packages->len, g_object_unref);
+
+	for (guint i = 0; i < packages->len; i++) {
+		PkPackage *item = g_ptr_array_index (packages, i);
+		PkInfoEnum info = pk_package_get_info (item);
+		PkPackage *emitted_item;
+
+		/* already emitted? */
+		emitted_item = g_hash_table_lookup (job->emitted, pk_package_get_id (item));
+		if (emitted_item != NULL && pk_package_equal (emitted_item, item))
+			continue;
+
+		/* update the emitted package table */
+		g_hash_table_insert (job->emitted,
+				     g_strdup (pk_package_get_id (item)),
+				     g_object_ref (item));
+
+		/* we automatically set the transaction status  */
+		if (info == PK_INFO_ENUM_DOWNLOADING)
+			pk_backend_job_set_status (job, PK_STATUS_ENUM_DOWNLOAD);
+		else if (info == PK_INFO_ENUM_UPDATING)
+			pk_backend_job_set_status (job, PK_STATUS_ENUM_UPDATE);
+		else if (info == PK_INFO_ENUM_INSTALLING)
+			pk_backend_job_set_status (job, PK_STATUS_ENUM_INSTALL);
+		else if (info == PK_INFO_ENUM_REMOVING)
+			pk_backend_job_set_status (job, PK_STATUS_ENUM_REMOVE);
+		else if (info == PK_INFO_ENUM_CLEANUP)
+			pk_backend_job_set_status (job, PK_STATUS_ENUM_CLEANUP);
+		else if (info == PK_INFO_ENUM_OBSOLETING)
+			pk_backend_job_set_status (job, PK_STATUS_ENUM_OBSOLETE);
+
+		/* we've sent a package for this transaction */
+		job->has_sent_package = TRUE;
+
+		g_ptr_array_add (to_emit, g_object_ref (item));
+	}
+
+	/* emit */
+	if (to_emit->len > 0)
+		pk_backend_job_call_vfunc (job,
+					   PK_BACKEND_SIGNAL_PACKAGES,
+					   g_steal_pointer (&to_emit),
+					   (GDestroyNotify) g_ptr_array_unref);
+}
+
+/**
+ * pk_backend_job_package_status:
+ * @job: A #PkBackendJob instance.
+ * @package_id: the package-id
+ * @info: the #PkInfoEnum describing what is happening to the package
+ *
+ * Report the status of a single package as it changes during a transaction,
+ * e.g. downloading, installing, removing or finished.
+ * Query results must be  collected with %pk_backend_packages_add() and reported with
+ * %pk_backend_job_packages() instead.
+ */
+void
+pk_backend_job_package_status (PkBackendJob *job, const gchar *package_id, PkInfoEnum info)
 {
 	PkPackage *emitted_item;
-	gboolean ret;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(PkPackage) item = NULL;
 
@@ -1042,16 +1131,13 @@ pk_backend_job_package_full (PkBackendJob *job,
 	g_return_if_fail (package_id != NULL);
 
 	/* check we are valid */
-	item = pk_package_new ();
-	ret = pk_package_set_id (item, package_id, &error);
-	if (!ret) {
+	item = pk_package_new_full (info, package_id, NULL, PK_INFO_ENUM_UNKNOWN, &error);
+	if (item == NULL) {
 		g_warning ("package_id %s invalid and cannot be processed: %s",
-			   package_id, error->message);
+			   package_id,
+			   error->message);
 		return;
 	}
-	pk_package_set_info (item, info);
-	pk_package_set_update_severity (item, update_severity);
-	pk_package_set_summary (item, summary);
 
 	/* already emitted? */
 	emitted_item = g_hash_table_lookup (job->emitted, pk_package_get_id (item));
@@ -1060,8 +1146,8 @@ pk_backend_job_package_full (PkBackendJob *job,
 
 	/* update the emitted package table */
 	g_hash_table_insert (job->emitted,
-	                     g_strdup (pk_package_get_id (item)),
-	                     g_object_ref (item));
+			     g_strdup (pk_package_get_id (item)),
+			     g_object_ref (item));
 
 	/* have we already set an error? */
 	if (job->set_error) {
@@ -1093,137 +1179,50 @@ pk_backend_job_package_full (PkBackendJob *job,
 				   g_object_unref);
 }
 
-void
-pk_backend_job_packages (PkBackendJob *job,
-                         GPtrArray    *packages  /* (element-type PkPackage) */)
+static void
+pk_backend_job_update_detail_validate (PkUpdateDetail *item)
 {
-	g_return_if_fail (PK_IS_BACKEND_JOB (job));
-	g_return_if_fail (packages != NULL);
-
-	for (guint i = 0; i < packages->len; i++) {
-		PkPackage *item = g_ptr_array_index (packages, i);
-		PkInfoEnum info = pk_package_get_info (item);
-		PkPackage *emitted_item;
-
-		/* already emitted? */
-		emitted_item = g_hash_table_lookup (job->emitted, pk_package_get_id (item));
-		if (emitted_item != NULL && pk_package_equal (emitted_item, item))
-			continue;
-
-		/* update the emitted package table */
-		g_hash_table_insert (job->emitted,
-			             g_strdup (pk_package_get_id (item)),
-			             g_object_ref (item));
-
-		/* have we already set an error? */
-		if (job->set_error) {
-			g_warning ("already set error: package %s", pk_package_get_id (item));
-			continue;
-		}
-
-		/* we automatically set the transaction status  */
-		if (info == PK_INFO_ENUM_DOWNLOADING)
-			pk_backend_job_set_status (job, PK_STATUS_ENUM_DOWNLOAD);
-		else if (info == PK_INFO_ENUM_UPDATING)
-			pk_backend_job_set_status (job, PK_STATUS_ENUM_UPDATE);
-		else if (info == PK_INFO_ENUM_INSTALLING)
-			pk_backend_job_set_status (job, PK_STATUS_ENUM_INSTALL);
-		else if (info == PK_INFO_ENUM_REMOVING)
-			pk_backend_job_set_status (job, PK_STATUS_ENUM_REMOVE);
-		else if (info == PK_INFO_ENUM_CLEANUP)
-			pk_backend_job_set_status (job, PK_STATUS_ENUM_CLEANUP);
-		else if (info == PK_INFO_ENUM_OBSOLETING)
-			pk_backend_job_set_status (job, PK_STATUS_ENUM_OBSOLETE);
-
-		/* we've sent a package for this transaction */
-		job->has_sent_package = TRUE;
-	}
-
-	/* emit; this relies on the @packages array having ownership of all its
-	 * elements, as the job is asynchronous so they may be freed in their
-	 * original calling context */
-	if (packages->len > 0)
-		pk_backend_job_call_vfunc (job,
-					   PK_BACKEND_SIGNAL_PACKAGES,
-					   g_ptr_array_ref (packages),
-					   (GDestroyNotify) g_ptr_array_unref);
-}
-
-void
-pk_backend_job_update_detail (PkBackendJob *job,
-			      const gchar *package_id,
-			      gchar **updates,
-			      gchar **obsoletes,
-			      gchar **vendor_urls,
-			      gchar **bugzilla_urls,
-			      gchar **cve_urls,
-			      PkRestartEnum restart,
-			      const gchar *update_text,
-			      const gchar *changelog,
-			      PkUpdateStateEnum state,
-			      const gchar *issued_text,
-			      const gchar *updated_text)
-{
+	g_autofree gchar *issued = NULL;
+	g_autofree gchar *updated = NULL;
 	g_autoptr(GDateTime) datetime = NULL;
-	g_autoptr(PkUpdateDetail) item = NULL;
 
-	g_return_if_fail (PK_IS_BACKEND_JOB (job));
-	g_return_if_fail (package_id != NULL);
-
-	/* have we already set an error? */
-	if (job->set_error) {
-		g_warning ("already set error: update_detail %s", package_id);
-		return;
-	}
+	g_object_get (item, "issued", &issued, "updated", &updated, NULL);
 
 	/* check the dates are not empty */
-	if (issued_text != NULL && issued_text[0] == '\0')
-		issued_text = NULL;
-	if (updated_text != NULL && updated_text[0] == '\0')
-		updated_text = NULL;
+	if (issued != NULL && issued[0] == '\0')
+		g_object_set (item, "issued", NULL, NULL);
+	if (updated != NULL && updated[0] == '\0')
+		g_object_set (item, "updated", NULL, NULL);
 
-	/* check the issued dates are valid */
-	if (issued_text != NULL) {
-		datetime = g_date_time_new_from_iso8601 (issued_text, NULL);
+	/* check the dates are valid */
+	if (issued != NULL && issued[0] != '\0') {
+		datetime = g_date_time_new_from_iso8601 (issued, NULL);
 		if (!datetime)
-			g_warning ("failed to parse issued '%s'", issued_text);
+			g_warning ("failed to parse issued '%s'", issued);
 		g_clear_pointer (&datetime, g_date_time_unref);
 	}
-	if (updated_text != NULL) {
-		datetime = g_date_time_new_from_iso8601 (updated_text, NULL);
+	if (updated != NULL && updated[0] != '\0') {
+		datetime = g_date_time_new_from_iso8601 (updated, NULL);
 		if (!datetime)
-			g_warning ("failed to parse updated '%s'", updated_text);
+			g_warning ("failed to parse updated '%s'", updated);
 		g_clear_pointer (&datetime, g_date_time_unref);
 	}
-
-	/* form PkUpdateDetail struct */
-	item = pk_update_detail_new ();
-	g_object_set (item,
-		      "package-id", package_id,
-		      "updates", updates,
-		      "obsoletes", obsoletes,
-		      "vendor-urls", vendor_urls,
-		      "bugzilla-urls", bugzilla_urls,
-		      "cve-urls", cve_urls,
-		      "restart", restart,
-		      "update-text", update_text,
-		      "changelog", changelog,
-		      "state", state,
-		      "issued", issued_text,
-		      "updated", updated_text,
-		      NULL);
-
-	/* emit */
-	pk_backend_job_call_vfunc (job,
-				   PK_BACKEND_SIGNAL_UPDATE_DETAIL,
-				   g_object_ref (item),
-				   g_object_unref);
 }
 
+/**
+ * pk_backend_job_update_details:
+ * @job: A #PkBackendJob instance.
+ * @update_details: (element-type PkUpdateDetail): The update details.
+ *
+ * Report update details, e.g. the results of GetUpdateDetail. The
+ * @update_details array is copied, so the caller may free or reuse
+ * it right away.
+ */
 void
-pk_backend_job_update_details (PkBackendJob *job,
-                               GPtrArray    *update_details  /* (element-type PkUpdateDetail) */)
+pk_backend_job_update_details (PkBackendJob *job, GPtrArray *update_details)
 {
+	g_autoptr(GPtrArray) to_emit = NULL;
+
 	g_return_if_fail (PK_IS_BACKEND_JOB (job));
 	g_return_if_fail (update_details != NULL);
 
@@ -1233,20 +1232,26 @@ pk_backend_job_update_details (PkBackendJob *job,
 		return;
 	}
 
-	/* emit; this relies on the @update_details array having ownership of
-	 * all its elements, as the job is asynchronous so they may be freed in
-	 * their original calling context */
-	if (update_details->len > 0)
+	/* The job is asynchronous, so the update details are copied into an
+	 * array owned by the emission itself */
+	to_emit = g_ptr_array_new_full (update_details->len, g_object_unref);
+	for (guint i = 0; i < update_details->len; i++) {
+		PkUpdateDetail *item = g_ptr_array_index (update_details, i);
+
+		pk_backend_job_update_detail_validate (item);
+		g_ptr_array_add (to_emit, g_object_ref (item));
+	}
+
+	/* emit */
+	if (to_emit->len > 0)
 		pk_backend_job_call_vfunc (job,
 					   PK_BACKEND_SIGNAL_UPDATE_DETAILS,
-					   g_ptr_array_ref (update_details),
+					   g_steal_pointer (&to_emit),
 					   (GDestroyNotify) g_ptr_array_unref);
 }
 
 void
-pk_backend_job_require_restart (PkBackendJob *job,
-				PkRestartEnum restart,
-				const gchar *package_id)
+pk_backend_job_require_restart (PkBackendJob *job, PkRestartEnum restart, const gchar *package_id)
 {
 	g_autoptr(PkRequireRestart) item = NULL;
 
@@ -1254,7 +1259,8 @@ pk_backend_job_require_restart (PkBackendJob *job,
 
 	/* have we already set an error? */
 	if (job->set_error) {
-		g_warning ("already set error: require-restart %s", pk_restart_enum_to_string (restart));
+		g_warning ("already set error: require-restart %s",
+			   pk_restart_enum_to_string (restart));
 		return;
 	}
 
@@ -1266,10 +1272,7 @@ pk_backend_job_require_restart (PkBackendJob *job,
 
 	/* form PkRequireRestart struct */
 	item = pk_require_restart_new ();
-	g_object_set (item,
-		      "restart", restart,
-		      "package-id", package_id,
-		      NULL);
+	g_object_set (item, "restart", restart, "package-id", package_id, NULL);
 
 	/* emit */
 	pk_backend_job_call_vfunc (job,
@@ -1303,20 +1306,28 @@ pk_backend_job_details (PkBackendJob *job,
 	/* form PkDetails struct */
 	item = pk_details_new ();
 	g_object_set (item,
-		      "package-id", package_id,
-		      "summary", summary,
-		      "license", license,
-		      "group", group,
-		      "description", description,
-		      "url", url,
-		      "size", (guint64) size,
-		      "download-size", download_size,
+		      "package-id",
+		      package_id,
+		      "summary",
+		      summary,
+		      "license",
+		      license,
+		      "group",
+		      group,
+		      "description",
+		      description,
+		      "url",
+		      url,
+		      "size",
+		      (guint64) size,
+		      "download-size",
+		      download_size,
 		      NULL);
 
 	/* emit */
 	pk_backend_job_call_vfunc (job,
-			       PK_BACKEND_SIGNAL_DETAILS,
-			       g_object_ref (item),
+				   PK_BACKEND_SIGNAL_DETAILS,
+				   g_object_ref (item),
 				   g_object_unref);
 }
 
@@ -1326,9 +1337,7 @@ pk_backend_job_details (PkBackendJob *job,
  * @package_id is %NULL when we are using this as a calback from DownloadPackages
  **/
 void
-pk_backend_job_files (PkBackendJob *job,
-		      const gchar *package_id,
-		      gchar **files)
+pk_backend_job_files (PkBackendJob *job, const gchar *package_id, gchar **files)
 {
 	g_autoptr(PkFiles) item = NULL;
 
@@ -1351,10 +1360,7 @@ pk_backend_job_files (PkBackendJob *job,
 
 	/* form PkFiles struct */
 	item = pk_files_new ();
-	g_object_set (item,
-		      "package-id", package_id,
-		      "files", files,
-		      NULL);
+	g_object_set (item, "package-id", package_id, "files", files, NULL);
 
 	/* emit */
 	pk_backend_job_call_vfunc (job,
@@ -1387,11 +1393,7 @@ pk_backend_job_distro_upgrade (PkBackendJob *job,
 
 	/* form PkDistroUpgrade struct */
 	item = pk_distro_upgrade_new ();
-	g_object_set (item,
-		      "state", state,
-		      "name", name,
-		      "summary", summary,
-		      NULL);
+	g_object_set (item, "state", state, "name", name, "summary", summary, NULL);
 
 	/* emit */
 	pk_backend_job_call_vfunc (job,
@@ -1431,14 +1433,22 @@ pk_backend_job_repo_signature_required (PkBackendJob *job,
 	/* form PkRepoSignatureRequired struct */
 	item = pk_repo_signature_required_new ();
 	g_object_set (item,
-		      "package-id", package_id,
-		      "repository-name", repository_name,
-		      "key-url", key_url,
-		      "key-userid", key_userid,
-		      "key-id", key_id,
-		      "key-fingerprint", key_fingerprint,
-		      "key-timestamp", key_timestamp,
-		      "type", type,
+		      "package-id",
+		      package_id,
+		      "repository-name",
+		      repository_name,
+		      "key-url",
+		      key_url,
+		      "key-userid",
+		      key_userid,
+		      "key-id",
+		      key_id,
+		      "key-fingerprint",
+		      key_fingerprint,
+		      "key-timestamp",
+		      key_timestamp,
+		      "type",
+		      type,
 		      NULL);
 
 	/* emit */
@@ -1481,10 +1491,14 @@ pk_backend_job_eula_required (PkBackendJob *job,
 	/* form PkEulaRequired struct */
 	item = pk_eula_required_new ();
 	g_object_set (item,
-		      "eula-id", eula_id,
-		      "package-id", package_id,
-		      "vendor-name", vendor_name,
-		      "license-agreement", license_agreement,
+		      "eula-id",
+		      eula_id,
+		      "package-id",
+		      package_id,
+		      "vendor-name",
+		      vendor_name,
+		      "license-agreement",
+		      license_agreement,
 		      NULL);
 
 	/* emit */
@@ -1495,39 +1509,6 @@ pk_backend_job_eula_required (PkBackendJob *job,
 
 	/* success */
 	job->set_eula = TRUE;
-}
-
-void
-pk_backend_job_media_change_required (PkBackendJob *job,
-				      PkMediaTypeEnum media_type,
-				      const gchar *media_id,
-				      const gchar *media_text)
-{
-	g_autoptr(PkMediaChangeRequired) item = NULL;
-
-	g_return_if_fail (PK_IS_BACKEND_JOB (job));
-	g_return_if_fail (media_id != NULL);
-	g_return_if_fail (media_text != NULL);
-
-	/* have we already set an error? */
-	if (job->set_error) {
-		g_warning ("already set error: media change required");
-		return;
-	}
-
-	/* form PkMediaChangeRequired struct */
-	item = pk_media_change_required_new ();
-	g_object_set (item,
-		      "media-type", media_type,
-		      "media-id", media_id,
-		      "media-text", media_text,
-		      NULL);
-
-	/* emit */
-	pk_backend_job_call_vfunc (job,
-				   PK_BACKEND_SIGNAL_MEDIA_CHANGE_REQUIRED,
-				   g_object_ref (item),
-				   g_object_unref);
 }
 
 void
@@ -1550,9 +1531,12 @@ pk_backend_job_repo_detail (PkBackendJob *job,
 	/* form PkRepoDetail struct */
 	item = pk_repo_detail_new ();
 	g_object_set (item,
-		      "repo-id", repo_id,
-		      "description", description,
-		      "enabled", enabled,
+		      "repo-id",
+		      repo_id,
+		      "description",
+		      description,
+		      "enabled",
+		      enabled,
 		      NULL);
 
 	/* emit */
@@ -1562,64 +1546,26 @@ pk_backend_job_repo_detail (PkBackendJob *job,
 				   g_object_unref);
 }
 
-void
-pk_backend_job_category (PkBackendJob *job,
-			 const gchar *parent_id,
-			 const gchar *cat_id,
-			 const gchar *name,
-			 const gchar *summary,
-			 const gchar *icon)
-{
-	g_autoptr(PkCategory) item = NULL;
-
-	g_return_if_fail (PK_IS_BACKEND_JOB (job));
-	g_return_if_fail (cat_id != NULL);
-
-	/* have we already set an error? */
-	if (job->set_error) {
-		g_warning ("already set error: category %s", cat_id);
-		return;
-	}
-
-	/* form PkCategory struct */
-	item = pk_category_new ();
-	g_object_set (item,
-		      "parent-id", parent_id,
-		      "cat-id", cat_id,
-		      "name", name,
-		      "summary", summary,
-		      "icon", icon,
-		      NULL);
-
-	/* emit */
-	pk_backend_job_call_vfunc (job,
-				   PK_BACKEND_SIGNAL_CATEGORY,
-				   g_object_ref (item),
-				   g_object_unref);
-}
-
 static gboolean
 pk_backend_job_error_code_is_need_untrusted (PkErrorEnum error_code)
 {
 	gboolean ret = FALSE;
 	switch (error_code) {
-		case PK_ERROR_ENUM_GPG_FAILURE:
-		case PK_ERROR_ENUM_BAD_GPG_SIGNATURE:
-		case PK_ERROR_ENUM_MISSING_GPG_SIGNATURE:
-		case PK_ERROR_ENUM_CANNOT_INSTALL_REPO_UNSIGNED:
-		case PK_ERROR_ENUM_CANNOT_UPDATE_REPO_UNSIGNED:
-			ret = TRUE;
-			break;
-		default:
-			break;
+	case PK_ERROR_ENUM_GPG_FAILURE:
+	case PK_ERROR_ENUM_BAD_GPG_SIGNATURE:
+	case PK_ERROR_ENUM_MISSING_GPG_SIGNATURE:
+	case PK_ERROR_ENUM_CANNOT_INSTALL_REPO_UNSIGNED:
+	case PK_ERROR_ENUM_CANNOT_UPDATE_REPO_UNSIGNED:
+		ret = TRUE;
+		break;
+	default:
+		break;
 	}
 	return ret;
 }
 
 void
-pk_backend_job_error_code (PkBackendJob *job,
-			   PkErrorEnum error_code,
-			   const gchar *format, ...)
+pk_backend_job_error_code (PkBackendJob *job, PkErrorEnum error_code, const gchar *format, ...)
 {
 	va_list args;
 	gboolean need_untrusted;
@@ -1665,10 +1611,7 @@ pk_backend_job_error_code (PkBackendJob *job,
 
 	/* form PkError struct */
 	error = pk_error_new ();
-	g_object_set (error,
-		      "code", error_code,
-		      "details", buffer,
-		      NULL);
+	g_object_set (error, "code", error_code, "details", buffer, NULL);
 
 	/* emit */
 	pk_backend_job_call_vfunc (job,
@@ -1732,8 +1675,8 @@ pk_backend_job_set_exit_code (PkBackendJob *job, PkExitEnum exit_enum)
 
 	if (job->exit != PK_EXIT_ENUM_UNKNOWN) {
 		g_warning ("already set exit status: old=%s, new=%s",
-			    pk_exit_enum_to_string (job->exit),
-			    pk_exit_enum_to_string (exit_enum));
+			   pk_exit_enum_to_string (job->exit),
+			   pk_exit_enum_to_string (exit_enum));
 		return;
 	}
 
@@ -1765,15 +1708,13 @@ pk_backend_job_finished (PkBackendJob *job)
 	role_text = pk_role_enum_to_string (job->role);
 
 	/* ensure the same number of ::Files() were sent as packages for DownloadPackages */
-	if (!job->set_error &&
-	    job->role == PK_ROLE_ENUM_DOWNLOAD_PACKAGES &&
+	if (!job->set_error && job->role == PK_ROLE_ENUM_DOWNLOAD_PACKAGES &&
 	    job->download_files == 0) {
 		g_warning ("required multiple Files() for each package_id!");
 	}
 
 	/* check we sent at least one status calls */
-	if (job->set_error == FALSE &&
-	    job->status == PK_STATUS_ENUM_SETUP) {
+	if (job->set_error == FALSE && job->status == PK_STATUS_ENUM_SETUP) {
 		g_warning ("required status signals for %s!", role_text);
 	}
 
@@ -1846,8 +1787,10 @@ pk_backend_job_init (PkBackendJob *job)
 	job->exit = PK_EXIT_ENUM_UNKNOWN;
 	job->role = PK_ROLE_ENUM_UNKNOWN;
 	job->status = PK_STATUS_ENUM_UNKNOWN;
-	job->emitted = g_hash_table_new_full (g_str_hash, g_str_equal,
-	                                      g_free, (GDestroyNotify) g_object_unref);
+	job->emitted = g_hash_table_new_full (g_str_hash,
+					      g_str_equal,
+					      g_free,
+					      (GDestroyNotify) g_object_unref);
 }
 
 /**
@@ -1863,4 +1806,3 @@ pk_backend_job_new (GKeyFile *conf)
 	job->conf = g_key_file_ref (conf);
 	return PK_BACKEND_JOB (job);
 }
-

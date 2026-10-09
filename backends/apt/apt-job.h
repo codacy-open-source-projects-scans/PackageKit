@@ -2,12 +2,12 @@
  *
  * Copyright (c) 1999-2002, 2004-2005, 2007-2008 Daniel Burrows
  * Copyright (c) 2009-2016 Daniel Nicoletti <dantti12@gmail.com>
- *               2012 Matthias Klumpp <matthias@tenstral.net>
+ *               2012-2026 Matthias Klumpp <matthias@tenstral.net>
  *               2016 Harald Sitter <sitter@kde.org>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -16,12 +16,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #pragma once
+
+#include <memory>
+#include <vector>
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -110,6 +111,7 @@ public:
      * @param fixBroken whether to automatically fix broken packages
      * @param flags operation flags as per public API
      * @param autoremove whether to autoremove dangling packages
+     * @param allowRemoveDeps whether to allow removal of dependent packages
      */
     bool runTransaction(
         const PkgList &install,
@@ -117,7 +119,8 @@ public:
         const PkgList &update,
         bool fixBroken,
         PkBitfield flags,
-        bool autoremove);
+        bool autoremove,
+        bool allowRemoveDeps);
 
     /**
      *  Get package depends
@@ -137,7 +140,7 @@ public:
     /**
      * Returns a list of all packages in the cache
      */
-    PkgList getPackagesFromRepo(SourcesList::SourceRecord *&);
+    PkgList getPackagesFromRepo(SourcesList::SourceRecord *rec);
 
     /**
      * Returns a list of all packages in the given groups
@@ -147,12 +150,12 @@ public:
     /**
      * Returns a list of all packages that matched their names with matcher
      */
-    PkgList searchPackageName(const vector<string> &queries);
+    PkgList searchPackageName(const std::vector<std::string> &queries);
 
     /**
      * Returns a list of all packages that matched their description with matcher
      */
-    PkgList searchPackageDetails(const vector<string> &queries);
+    PkgList searchPackageDetails(const std::vector<std::string> &queries);
 
     /**
      * Returns a list of all packages that matched contains the given files
@@ -267,9 +270,9 @@ public:
 private:
     void setEnvLocaleFromJob();
     bool checkTrusted(pkgAcquire &fetcher, PkBitfield flags);
-    bool packageIsSupported(const pkgCache::VerIterator &verIter, string component);
+    bool packageIsSupported(const pkgCache::VerIterator &verIter, std::string component);
     bool isApplication(const pkgCache::VerIterator &verIter);
-    bool matchesQueries(const vector<string> &queries, string s);
+    bool matchesQueries(const std::vector<std::string> &queries, std::string s);
     bool dpkgHasForceConfFileSet();
     PkInfoEnum packageStateFromVer(const pkgCache::VerIterator &ver) const;
     void stagePackageForEmit(
@@ -283,10 +286,31 @@ private:
      *  interprets dpkg status fd
      */
     void updateInterface(int readFd, int writeFd, bool *errorEmitted = nullptr);
+
+    /**
+     * Handle a single newline-terminated line read from the dpkg status pipe.
+     */
+    void handleDpkgStatusLine(const std::string &line, int writeFd, bool *errorEmitted);
+
+    /**
+     * Check that no packages are marked for deletion other than those the user
+     * explicitly asked to remove. Used when the caller did not pass allow_deps=true
+     * on RemovePackages.
+     * @returns true if no implicit removals were detected; false (and emits
+     * an error) otherwise.
+     */
+    bool checkNoImplicitRemovals(const std::vector<unsigned int> &explicitRemovalPkgIds);
+
+    /**
+     * Mark any package for removal that became garbage as a result of the
+     * current transaction (i.e. was not garbage initially).
+     */
+    void markNewGarbageForRemoval(pkgProblemResolver &Fix, const PkgList &initialGarbage);
+
     PkgList checkChangedPackages(bool emitChanged);
     pkgCache::VerIterator findTransactionPackage(const std::string &name);
 
-    AptCacheFile *m_cache;
+    std::unique_ptr<AptCacheFile> m_cache;
     PkBackendJob *m_job;
     bool m_cancel;
     struct stat m_restartStat;
@@ -296,7 +320,7 @@ private:
     PkgList m_restartPackages;
 
     time_t m_lastTermAction;
-    string m_lastPackage;
+    std::string m_lastPackage;
     uint m_lastSubProgress;
     bool m_startCounting;
     bool m_interactive;

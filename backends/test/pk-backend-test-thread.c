@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <gmodule.h>
@@ -47,13 +46,22 @@ pk_backend_destroy (PkBackend *backend)
 static void
 pk_backend_search_groups_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
+
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 
 	/* emit */
-	pk_backend_job_package (job, PK_INFO_ENUM_INSTALLED,
-			    "glib2;2.14.0;i386;fedora", "The GLib library");
-	pk_backend_job_package (job, PK_INFO_ENUM_INSTALLED,
-			    "gtk2;gtk2-2.11.6-6.fc8;i386;fedora", "GTK+ Libraries for GIMP");
+	pk_backend_packages_add (packages,
+				 PK_INFO_ENUM_INSTALLED,
+				 "glib2;2.14.0;i386;fedora;",
+				 "The GLib library",
+				 PK_INFO_ENUM_UNKNOWN);
+	pk_backend_packages_add (packages,
+				 PK_INFO_ENUM_INSTALLED,
+				 "gtk2;gtk2-2.11.6-6.fc8;i386;fedora;",
+				 "GTK+ Libraries for GIMP",
+				 PK_INFO_ENUM_UNKNOWN);
+	pk_backend_job_packages (job, packages);
 }
 
 void
@@ -70,10 +78,9 @@ pk_backend_search_names_thread (PkBackendJob *job, GVariant *params, gpointer us
 	PkBitfield filters;
 	gchar *filters_text;
 	g_autofree gchar **search = NULL;
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
-	g_variant_get (params, "(t^a&s)",
-		       &filters,
-		       &search);
+	g_variant_get (params, "(t^a&s)", &filters, &search);
 
 	filters_text = pk_filter_bitfield_to_string (filters);
 	g_debug ("started task (%p) search=%s filters=%s", job, search[0], filters_text);
@@ -84,30 +91,36 @@ pk_backend_search_names_thread (PkBackendJob *job, GVariant *params, gpointer us
 	do {
 		/* now is a good time to see if we should cancel the thread */
 		if (is_cancelled) {
-			pk_backend_job_error_code (job, PK_ERROR_ENUM_TRANSACTION_CANCELLED,
-					       "The thread was stopped successfully");
+			pk_backend_job_error_code (job,
+						   PK_ERROR_ENUM_TRANSACTION_CANCELLED,
+						   "The thread was stopped successfully");
 			return;
 		}
 		pk_backend_job_set_percentage (job, percentage);
 		percentage += 10;
-		g_usleep (1000*100);
+		g_usleep (1000 * 100);
 	} while (percentage < 100);
 	g_timer_destroy (timer);
 	pk_backend_job_set_percentage (job, 100);
 	g_debug ("exited task (%p)", job);
 
-	pk_backend_job_package (job, PK_INFO_ENUM_INSTALLED,
-			    "glib2;2.14.0;i386;fedora", "The GLib library");
-	pk_backend_job_package (job, PK_INFO_ENUM_INSTALLED,
-			    "gtk2;gtk2-2.11.6-6.fc8;i386;fedora", "GTK+ Libraries for GIMP");
+	pk_backend_packages_add (packages,
+				 PK_INFO_ENUM_INSTALLED,
+				 "glib2;2.14.0;i386;fedora;",
+				 "The GLib library",
+				 PK_INFO_ENUM_UNKNOWN);
+	pk_backend_packages_add (packages,
+				 PK_INFO_ENUM_INSTALLED,
+				 "gtk2;gtk2-2.11.6-6.fc8;i386;fedora;",
+				 "GTK+ Libraries for GIMP",
+				 PK_INFO_ENUM_UNKNOWN);
+	pk_backend_job_packages (job, packages);
 }
 
 void
 pk_backend_search_names (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
-	pk_backend_job_thread_create (job,
-				      pk_backend_search_names_thread,
-				      NULL, NULL);
+	pk_backend_job_thread_create (job, pk_backend_search_names_thread, NULL, NULL);
 }
 
 void

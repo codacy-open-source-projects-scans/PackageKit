@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -31,20 +30,23 @@
 #include <glib.h>
 #include <glib-unix.h>
 #include <glib/gi18n.h>
-#include <packagekit-glib2/pk-debug.h>
+#include <pk-debug.h>
 #ifdef HAVE_SYSTEMD_SD_DAEMON_H
 #include <systemd/sd-daemon.h>
 #endif
+
+#include <pk-offline-private.h>
 
 #include "pk-engine.h"
 #include "pk-shared.h"
 #include "pk-transaction.h"
 
-typedef struct {
-	GMainLoop	*loop;
-	PkEngine	*engine;
-	guint		 exit_idle_time;
-	guint		 timer_id;
+typedef struct
+{
+	GMainLoop *loop;
+	PkEngine *engine;
+	guint exit_idle_time;
+	guint timer_id;
 } PkMainHelper;
 
 /**
@@ -108,9 +110,13 @@ main (int argc, char *argv[])
 	g_autoptr(GError) error = NULL;
 	g_autofree gchar *backend_name = NULL;
 	g_autofree gchar *conf_filename = NULL;
+	g_autofree gchar *root_dir = NULL;
 	g_autoptr(GKeyFile) conf = NULL;
 	g_autoptr(PkEngine) engine = NULL;
 
+	/* Each option is one record per line; clang-format would put every field
+ * on a line of its own and make the table unreadable. */
+	/* clang-format off */
 	const GOptionEntry options[] = {
 		{ "backend", '\0', 0, G_OPTION_ARG_STRING, &backend_name,
 		  /* TRANSLATORS: a backend is the system package tool, e.g. dnf, apt */
@@ -130,8 +136,12 @@ main (int argc, char *argv[])
 		{ "keep-environment", '\0', 0, G_OPTION_ARG_NONE, &keep_environment,
 		  /* TRANSLATORS: don't unset environment variables, used for debugging */
 		  _("Don't clear environment on startup"), NULL },
+		{ "config", '\0', 0, G_OPTION_ARG_FILENAME, &conf_filename,
+		  /* TRANSLATORS: path to an alternative configuration file, used for testing */
+		  _("Use this configuration file instead of the default"), N_("FILE") },
 		G_OPTION_ENTRY_NULL
 	};
+	/* clang-format on */
 
 	setlocale (LC_ALL, "");
 	bindtextdomain (GETTEXT_PACKAGE, PACKAGE_LOCALE_DIR);
@@ -169,20 +179,27 @@ main (int argc, char *argv[])
 
 	/* get values from the config file */
 	conf = g_key_file_new ();
-	conf_filename = pk_util_get_config_filename ();
+	if (conf_filename == NULL)
+		conf_filename = pk_util_get_config_filename ();
 	if (conf_filename == NULL) {
 		g_printerr ("%s\n", _("Config file was not found."));
 		goto out;
 	}
-	ret = g_key_file_load_from_file (conf, conf_filename,
-					 G_KEY_FILE_NONE, &error);
+	ret = g_key_file_load_from_file (conf, conf_filename, G_KEY_FILE_NONE, &error);
 	if (!ret) {
 		/* TRANSLATORS: The placeholder is an error message */
-		g_autofree gchar *message = g_strdup_printf (_("Failed to load config file: %s"), error->message);
+		g_autofree gchar *message = g_strdup_printf (_("Failed to load config file: %s"),
+							       error->message);
 		g_printerr ("%s\n", message);
 		goto out;
 	}
 	g_key_file_set_boolean (conf, "Daemon", "KeepEnvironment", keep_environment);
+
+	/* the offline update state is kept below the configured root directory */
+	root_dir = pk_util_get_root_dir (conf);
+	pk_offline_set_root_dir (root_dir);
+	if (g_strcmp0 (root_dir, "/") != 0)
+		g_debug ("using %s as root directory", root_dir);
 
 	/* log the startup */
 	syslog (LOG_DAEMON | LOG_DEBUG, "daemon start");
@@ -205,20 +222,18 @@ main (int argc, char *argv[])
 
 	/* override the backend name */
 	if (backend_name != NULL) {
-		g_key_file_set_string (conf,
-				       "Daemon",
-				       "DefaultBackend",
-				       backend_name);
+		g_key_file_set_string (conf, "Daemon", "DefaultBackend", backend_name);
 	}
 
 	/* resolve 'auto' to an actual name */
 	backend_name = g_key_file_get_string (conf, "Daemon", "DefaultBackend", NULL);
 	if (backend_name == NULL || g_strcmp0 (backend_name, "auto") == 0) {
-		ret  = pk_util_set_auto_backend (conf, &error);
+		ret = pk_util_set_auto_backend (conf, &error);
 		if (!ret) {
-			/* TRANSLATORS: The placeholder is an error message.
-			 * `auto` is a potential value of the DefaultBackend= configuration key. */
-			g_autofree gchar *message = g_strdup_printf (_("Failed to resolve auto: %s"), error->message);
+			g_autofree gchar *message = g_strdup_printf (
+			    /* TRANSLATORS: The placeholder is an error message.
+			     * `auto` is a potential value of the DefaultBackend= configuration key. */
+			    _("Failed to resolve auto: %s"), error->message);
 			g_printerr ("%s\n", message);
 			goto out;
 		}
@@ -228,21 +243,17 @@ main (int argc, char *argv[])
 
 	/* create a new engine object */
 	engine = pk_engine_new (conf);
-	g_signal_connect (engine, "quit",
-			  G_CALLBACK (pk_main_quit_cb), loop);
+	g_signal_connect (engine, "quit", G_CALLBACK (pk_main_quit_cb), loop);
 
 	/* do stuff on ctrl-c */
-	g_unix_signal_add_full (G_PRIORITY_DEFAULT,
-				SIGINT,
-				pk_main_sigint_cb,
-				loop,
-				NULL);
+	g_unix_signal_add_full (G_PRIORITY_DEFAULT, SIGINT, pk_main_sigint_cb, loop, NULL);
 
 	/* load the backend */
 	ret = pk_engine_load_backend (engine, &error);
 	if (!ret) {
 		/* TRANSLATORS: cannot load the backend the user specified */
-		g_autofree gchar *message = g_strdup_printf (_("Failed to load the backend: %s"), error->message);
+		g_autofree gchar *message = g_strdup_printf (_("Failed to load the backend: %s"),
+							       error->message);
 		g_printerr ("%s\n", message);
 		goto out;
 	}
@@ -257,7 +268,9 @@ main (int argc, char *argv[])
 		helper.engine = engine;
 		helper.exit_idle_time = exit_idle_time;
 		helper.loop = loop;
-		helper.timer_id = g_timeout_add_seconds (5, (GSourceFunc) pk_main_timeout_check_cb, &helper);
+		helper.timer_id = g_timeout_add_seconds (5,
+							 (GSourceFunc) pk_main_timeout_check_cb,
+							 &helper);
 		g_source_set_name_by_id (helper.timer_id, "[PkMain] main poll");
 	} else {
 		helper.timer_id = 0;

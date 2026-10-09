@@ -2,9 +2,9 @@
  *
  * Copyright (c) 2010-2016 Daniel Nicoletti <dantti12@gmail.com>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -13,9 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "gst-matcher.h"
@@ -29,7 +27,7 @@ static bool inited = false;
 GstMatcher::GstMatcher(gchar **values)
 {
     if (!inited) {
-        gst_init(NULL, NULL);
+        gst_init(nullptr, nullptr);
         inited = true;
     }
 
@@ -53,27 +51,27 @@ GstMatcher::GstMatcher(gchar **values)
         regmatch_t matches[6];
         if (regexec(&pkre, value, 6, matches, 0) != REG_NOMATCH) {
             Match mvals;
-            string version, type, data, opt;
+            std::string version, type, data, opt;
             bool native = false;
 
             // Appends the version "0.10"
             version = "\nGstreamer-Version: ";
-            version.append(string(value, matches[1].rm_so, matches[1].rm_eo - matches[1].rm_so));
+            version.append(std::string(value, matches[1].rm_so, matches[1].rm_eo - matches[1].rm_so));
 
             // type (encode|decoder...)
-            type = string(value, matches[3].rm_so, matches[3].rm_eo - matches[3].rm_so);
+            type = std::string(value, matches[3].rm_so, matches[3].rm_eo - matches[3].rm_so);
 
             // data "audio/x-wma"
-            data = string(value, matches[4].rm_so, matches[4].rm_eo - matches[4].rm_so);
+            data = std::string(value, matches[4].rm_so, matches[4].rm_eo - matches[4].rm_so);
 
             // opt "wmaversion=3"
             if (matches[5].rm_so != -1) {
                 // remove the '(' ')' that the regex matched
-                opt = string(value, matches[5].rm_so + 1, matches[5].rm_eo - matches[5].rm_so - 2);
+                opt = std::string(value, matches[5].rm_so + 1, matches[5].rm_eo - matches[5].rm_so - 2);
                 if (!opt.empty()) {
                     size_t start_pos = 0;
                     // This is hardcoded in pk-gstreamer-install, so we also hardcode it here
-                    const string arch_64 = ")(64bit";
+                    const std::string arch_64 = ")(64bit";
                     if (ends_with(opt.c_str(), arch_64.c_str())) {
                         /* The ()(64bit) suffix is an RPM artifact, where it is used to distinguish
                          * between the primary and secondary architecture in a 2-arch system.
@@ -86,7 +84,7 @@ GstMatcher::GstMatcher(gchar **values)
                     }
 
                     // Replace all ")(" with "," - convert from input to serialized caps format
-                    while ((start_pos = opt.find(")(", start_pos)) != string::npos) {
+                    while ((start_pos = opt.find(")(", start_pos)) != std::string::npos) {
                         if (start_pos == opt.length() - 2) {
                             // Avoid trailing comma
                             opt.erase(start_pos, 2);
@@ -110,18 +108,16 @@ GstMatcher::GstMatcher(gchar **values)
                 type = "Gstreamer-Elements: ";
             }
 
-            gchar *capsString;
+            g_autofree gchar *capsString = nullptr;
             if (opt.empty()) {
                 capsString = g_strdup_printf("%s", data.c_str());
             } else {
                 capsString = g_strdup_printf("%s, %s", data.c_str(), opt.c_str());
             }
-            GstCaps *caps = gst_caps_from_string(capsString);
-            g_free(capsString);
 
-            if (caps == NULL) {
+            GstCaps *caps = gst_caps_from_string(capsString);
+            if (caps == nullptr)
                 continue;
-            }
 
             mvals.version = version;
             mvals.type = type;
@@ -145,24 +141,24 @@ GstMatcher::~GstMatcher()
     }
 }
 
-bool GstMatcher::matches(string record, bool native)
+bool GstMatcher::matches(std::string record, bool native)
 {
     for (const Match &match : m_matches) {
         // Tries to find "Gstreamer-version: xxx"
-        if (record.find(match.version) != string::npos) {
+        if (record.find(match.version) != std::string::npos) {
             size_t found;
             if (match.native && !native)
                 continue;
             found = record.find(match.type);
             // Tries to find the type "Gstreamer-Uri-Sinks: "
-            if (found != string::npos) {
+            if (found != std::string::npos) {
                 found += match.type.size(); // skips the "Gstreamer-Uri-Sinks: " string
                 size_t endOfLine;
                 endOfLine = record.find('\n', found);
 
                 GstCaps *caps;
                 caps = gst_caps_from_string(record.substr(found, endOfLine - found).c_str());
-                if (caps == NULL) {
+                if (caps == nullptr) {
                     continue;
                 }
 

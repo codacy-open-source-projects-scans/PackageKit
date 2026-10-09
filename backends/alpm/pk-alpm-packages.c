@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "pk-backend-alpm.h"
@@ -29,7 +28,9 @@
 gchar *
 pk_alpm_pkg_build_id (alpm_pkg_t *pkg)
 {
-	const gchar *name, *version, *arch, *repo;
+	const gchar *name, *version, *arch;
+	const gchar *repo = NULL;
+	const gchar *data = NULL;
 
 	g_return_val_if_fail (pkg != NULL, NULL);
 
@@ -41,13 +42,12 @@ pk_alpm_pkg_build_id (alpm_pkg_t *pkg)
 		arch = "any";
 
 	/* TODO: check correctness */
-	if (alpm_pkg_get_origin (pkg) == ALPM_PKG_FROM_SYNCDB) {
+	if (alpm_pkg_get_origin (pkg) == ALPM_PKG_FROM_SYNCDB)
 		repo = alpm_db_get_name (alpm_pkg_get_db (pkg));
-	} else {
-		repo = "installed";
-	}
+	else
+		data = "installed";
 
-	return pk_package_id_build (name, version, arch, repo);
+	return pk_package_id_build (name, version, arch, repo, data);
 }
 
 void
@@ -58,8 +58,21 @@ pk_alpm_pkg_emit (PkBackendJob *job, alpm_pkg_t *pkg, PkInfoEnum info)
 	g_return_if_fail (pkg != NULL);
 
 	package = pk_alpm_pkg_build_id (pkg);
-	pk_backend_job_package (job, info, package, alpm_pkg_get_desc (pkg));
+	pk_backend_job_package_status (job, package, info);
 	g_free (package);
+}
+
+void
+pk_alpm_pkg_stage (GPtrArray *packages, alpm_pkg_t *pkg, PkInfoEnum info)
+{
+	g_autofree gchar *package_id = NULL;
+
+	g_return_if_fail (packages != NULL);
+	g_return_if_fail (pkg != NULL);
+
+	package_id = pk_alpm_pkg_build_id (pkg);
+	pk_backend_packages_add (packages, info, package_id,
+				      alpm_pkg_get_desc (pkg), PK_INFO_ENUM_UNKNOWN);
 }
 
 alpm_pkg_t *
@@ -76,10 +89,10 @@ pk_alpm_find_pkg (PkBackendJob *job, const gchar *package_id, GError **error)
 	g_return_val_if_fail (package_id != NULL, NULL);
 
 	package = pk_package_id_split (package_id);
-	repo_id = package[PK_PACKAGE_ID_DATA];
+	repo_id = package[PK_PACKAGE_ID_ORIGIN];
 
 	/* find the database to search in */
-	if (g_strcmp0 (repo_id, "installed") == 0) {
+	if (g_strcmp0 (package[PK_PACKAGE_ID_DATA], "installed") == 0) {
 		db = priv->localdb;
 	} else {
 		const alpm_list_t *i = alpm_get_syncdbs (priv->alpm_check ? priv->alpm_check : priv->alpm);
@@ -115,7 +128,7 @@ pk_alpm_find_pkg (PkBackendJob *job, const gchar *package_id, GError **error)
 }
 
 static gboolean
-pk_backend_resolve_package (PkBackendJob *job, const gchar *package, PkBitfield filters, GError **error)
+pk_backend_resolve_package (PkBackendJob *job, GPtrArray *packages, const gchar *package, PkBitfield filters, GError **error)
 {
 	alpm_pkg_t *pkg;
 
@@ -132,17 +145,17 @@ pk_backend_resolve_package (PkBackendJob *job, const gchar *package, PkBitfield 
 
 	if (alpm_pkg_get_origin (pkg) == ALPM_PKG_FROM_LOCALDB) {
 		if (!skip_local)
-			pk_alpm_pkg_emit (job, pkg, PK_INFO_ENUM_INSTALLED);
+			pk_alpm_pkg_stage (packages, pkg, PK_INFO_ENUM_INSTALLED);
 	} else {
 		if (!skip_remote)
-			pk_alpm_pkg_emit (job, pkg, PK_INFO_ENUM_AVAILABLE);
+			pk_alpm_pkg_stage (packages, pkg, PK_INFO_ENUM_AVAILABLE);
 	}
 
 	return TRUE;
 }
 
 static gboolean
-pk_backend_resolve_name (PkBackendJob *job, const gchar *name, PkBitfield filters, GError **error)
+pk_backend_resolve_name (PkBackendJob *job, GPtrArray *packages, const gchar *name, PkBitfield filters, GError **error)
 {
 	PkBackend *backend = pk_backend_job_get_backend (job);
 	PkBackendAlpmPrivate *priv = pk_backend_get_user_data (backend);
@@ -155,7 +168,7 @@ pk_backend_resolve_name (PkBackendJob *job, const gchar *name, PkBitfield filter
 	if (!pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_INSTALLED)) {
 		pkg = alpm_db_get_pkg (priv->localdb, name);
 		if (pkg != NULL) {
-			pk_alpm_pkg_emit (job, pkg, PK_INFO_ENUM_INSTALLED);
+			pk_alpm_pkg_stage (packages, pkg, PK_INFO_ENUM_INSTALLED);
 			return TRUE;
 		}
 	}
@@ -166,8 +179,8 @@ pk_backend_resolve_name (PkBackendJob *job, const gchar *name, PkBitfield filter
 		for (; i != NULL; i = i->next) {
 			pkg = alpm_db_get_pkg (i->data, name);
 			if (pkg != NULL) {
-				pk_alpm_pkg_emit (job, pkg,
-						PK_INFO_ENUM_AVAILABLE);
+				pk_alpm_pkg_stage (packages, pkg,
+						   PK_INFO_ENUM_AVAILABLE);
 				return TRUE;
 			}
 		}
@@ -184,21 +197,24 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant* params, gpointer p)
 {
 	const gchar **search;
 	PkBitfield filters;
+	g_autoptr(GPtrArray) packages = NULL;
 
 	g_variant_get (params, "(t^a&s)", &filters, &search);
 
+	packages = g_ptr_array_new_with_free_func (g_object_unref);
 	for (; *search != NULL; ++search) {
 		if (pk_backend_job_is_cancelled (job))
 			break;
 
 		/* find a package with the given id or name */
 		if (pk_package_id_check (*search)) {
-			pk_backend_resolve_package (job, *search, filters, NULL);
+			pk_backend_resolve_package (job, packages, *search, filters, NULL);
 		} else {
-			pk_backend_resolve_name (job, *search, filters, NULL);
+			pk_backend_resolve_name (job, packages, *search, filters, NULL);
 		}
 	}
 
+	pk_backend_job_packages (job, packages);
 	pk_alpm_finish (job, NULL);
 }
 

@@ -7,9 +7,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -18,8 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -43,12 +42,13 @@
 #include <gmodule.h>
 #include <pk-backend.h>
 #include <pk-shared.h>
-#include <packagekit-glib2/packagekit.h>
-#include <packagekit-glib2/pk-common-private.h>
-#include <packagekit-glib2/pk-enum.h>
+#include <packagekit.h>
+#include <pk-common-private.h>
+#include <pk-enum.h>
 
 #include <zypp/Digest.h>
 #include <zypp/KeyRing.h>
+#include <zypp/Locks.h>
 #include <zypp/Package.h>
 #include <zypp/Patch.h>
 #include <zypp/PathInfo.h>
@@ -173,6 +173,7 @@ zypp_build_package_id_from_resolvable (const sat::Solvable &resolvable)
 	gchar *package_id;
 	const char *arch;
 	g_autofree gchar *repo = NULL;
+	g_autofree gchar *data = NULL;
 
 	if (isKind<SrcPackage>(resolvable))
 		arch = "source";
@@ -180,22 +181,21 @@ zypp_build_package_id_from_resolvable (const sat::Solvable &resolvable)
 		arch = resolvable.arch ().asString ().c_str ();
 
 	if (resolvable.isSystem ()) {
-		PoolItem pi;
 		PoolItem installedPI { resolvable };
 		ui::Selectable::Ptr selectable { ui::Selectable::get (resolvable) };
+		PoolItem availablePI = selectable->identicalAvailableObj (installedPI);
 
-		if (selectable->identicalAvailableObj (installedPI) != NULL)
-			pi = selectable->identicalAvailableObj (installedPI);
-		else
-			pi = selectable->updateCandidateObj ();
-
-		repo = g_strconcat ("installed:", pi.repository ().alias ().c_str (), NULL);
+		/* libzypp does not record where an installed package came from, so only
+		 * claim an origin if an identical package is still available from a repository */
+		data = g_strdup ("installed");
+		if (availablePI)
+			repo = g_strdup (availablePI.repository ().alias ().c_str ());
 	} else
 		repo = g_strdup (resolvable.repository ().alias ().c_str ());
 
 	package_id = pk_package_id_build (resolvable.name ().c_str (),
 					  resolvable.edition ().asString ().c_str (),
-					  arch, repo);
+					  arch, repo, data);
 
 	return package_id;
 }
@@ -278,13 +278,11 @@ struct InstallResolvableReportReceiver : public zypp::callback::ReceiveReport<zy
 		}
 		_package_id = zypp_build_package_id_from_resolvable (resolvable->satSolvable ());
 		MIL << resolvable << " " << _package_id << std::endl;
-		gchar* summary = g_strdup(zypp::asKind<zypp::ResObject>(resolvable)->summary().c_str ());
 		if (_package_id != NULL) {
 			pk_backend_job_set_status (_job, PK_STATUS_ENUM_INSTALL);
-			pk_backend_job_package (_job, PK_INFO_ENUM_INSTALLING, _package_id, summary);
+			pk_backend_job_package_status (_job, _package_id, PK_INFO_ENUM_INSTALLING);
 			reset_sub_percentage ();
 		}
-		g_free (summary);
 	}
 
 	virtual bool progress (int value, zypp::Resolvable::constPtr resolvable) {
@@ -320,7 +318,7 @@ struct RemoveResolvableReportReceiver : public zypp::callback::ReceiveReport<zyp
 		_package_id = zypp_build_package_id_from_resolvable (resolvable->satSolvable ());
 		if (_package_id != NULL) {
 			pk_backend_job_set_status (_job, PK_STATUS_ENUM_REMOVE);
-			pk_backend_job_package (_job, PK_INFO_ENUM_REMOVING, _package_id, "");
+			pk_backend_job_package_status (_job, _package_id, PK_INFO_ENUM_REMOVING);
 			reset_sub_percentage ();
 		}
 	}
@@ -337,7 +335,7 @@ struct RemoveResolvableReportReceiver : public zypp::callback::ReceiveReport<zyp
 
 	virtual void finish (zypp::Resolvable::constPtr resolvable, Error error, const std::string &reason) {
 		if (_package_id != NULL) {
-			pk_backend_job_package (_job, PK_INFO_ENUM_FINISHED, _package_id, "");
+			pk_backend_job_package_status (_job, _package_id, PK_INFO_ENUM_FINISHED);
 			clear_package_id ();
 		}
 	}
@@ -397,16 +395,14 @@ struct DownloadProgressReportReceiver : public zypp::callback::ReceiveReport<zyp
 			_dl_status = PK_INFO_ENUM_DOWNLOADING;
 		}
 		_package_id = zypp_build_package_id_from_resolvable (resolvable->satSolvable ());
-		gchar* summary = g_strdup(zypp::asKind<zypp::ResObject>(resolvable)->summary().c_str ());
 
 		fprintf (stderr, "DownloadProgressReportReceiver::start():%s --%s\n",
 			 g_strdup (file.asString().c_str()),	_package_id);
 		if (_package_id != NULL) {
 			pk_backend_job_set_status (_job, PK_STATUS_ENUM_DOWNLOAD);
-			pk_backend_job_package (_job, PK_INFO_ENUM_DOWNLOADING, _package_id, summary);
+			pk_backend_job_package_status (_job, _package_id, PK_INFO_ENUM_DOWNLOADING);
 			reset_sub_percentage ();
 		}
-		g_free(summary);
 	}
 
 	virtual bool progress (int value, zypp::Resolvable::constPtr resolvable)
@@ -793,35 +789,46 @@ zypp_build_pool (ZYpp::Ptr zypp, gboolean include_local)
 	}
 
 	// we only load repositories once.
-	if (repos_loaded)
-		return zypp->pool();
+	if (!repos_loaded) {
+		// Add resolvables from enabled repos
+		RepoManager manager;
+		try {
+			for (RepoManager::RepoConstIterator it = manager.repoBegin(); it != manager.repoEnd(); ++it) {
+				RepoInfo repo (*it);
 
-	// Add resolvables from enabled repos
-	RepoManager manager;
-	try {
-		for (RepoManager::RepoConstIterator it = manager.repoBegin(); it != manager.repoEnd(); ++it) {
-			RepoInfo repo (*it);
+				// skip disabled repos
+				if (repo.enabled () == false)
+					continue;
+				// skip not cached repos
+				if (manager.isCached (repo) == false) {
+					g_warning ("%s is not cached! Do a refresh", repo.alias ().c_str ());
+					continue;
+				}
+				//FIXME see above, skip already cached repos
+				if (sat::Pool::instance().reposFind( repo.alias ()) == Repository::noRepository)
+					manager.loadFromCache (repo);
 
-			// skip disabled repos
-			if (repo.enabled () == false)
-				continue;
-			// skip not cached repos
-			if (manager.isCached (repo) == false) {
-				g_warning ("%s is not cached! Do a refresh", repo.alias ().c_str ());
-				continue;
 			}
-			//FIXME see above, skip already cached repos
-			if (sat::Pool::instance().reposFind( repo.alias ()) == Repository::noRepository)
-				manager.loadFromCache (repo);
-
+			repos_loaded = true;
+		} catch (const repo::RepoNoAliasException &ex) {
+			g_error ("Can't figure an alias to look in cache");
+		} catch (const repo::RepoNotCachedException &ex) {
+			g_error ("The repo has to be cached at first: %s", ex.asUserString ().c_str ());
+		} catch (const Exception &ex) {
+			g_error ("TODO: Handle exceptions: %s", ex.asUserString ().c_str ());
 		}
-		repos_loaded = true;
-	} catch (const repo::RepoNoAliasException &ex) {
-		g_error ("Can't figure an alias to look in cache");
-	} catch (const repo::RepoNotCachedException &ex) {
-		g_error ("The repo has to be cached at first: %s", ex.asUserString ().c_str ());
-	} catch (const Exception &ex) {
-		g_error ("TODO: Handle exceptions: %s", ex.asUserString ().c_str ());
+	}
+
+	/* Apply the locks from the libzypp locks file (/etc/zypp/locks) so that
+	 * locked packages are excluded from updates and installs, just like
+	 * zypper does. */
+	if (ZConfig::instance ().apply_locks_file ()) {
+		try {
+			zypp::Locks::instance ().readAndApply ();
+		} catch (const Exception &ex) {
+			g_warning ("Failed to apply the zypp locks file: %s",
+				   ex.asUserString ().c_str ());
+		}
 	}
 
 	return zypp->pool ();
@@ -853,8 +860,44 @@ get_enum_group (const string &group_)
 
 	if (group.find ("amusements") != string::npos) {
 		return PK_GROUP_ENUM_GAMES;
+	} else if (group.find ("development/debug") != string::npos) {
+		return PK_GROUP_ENUM_DEBUG;
+	} else if (group.find ("development/libraries") != string::npos) {
+		return PK_GROUP_ENUM_DEVEL;
+	} else if (group.find ("languages/c and c++") != string::npos) {
+		return PK_GROUP_ENUM_LANG_C;
+	} else if (group.find ("languages/go") != string::npos) {
+		return PK_GROUP_ENUM_LANG_GO;
+	} else if (group.find ("languages/haskell") != string::npos) {
+		return PK_GROUP_ENUM_LANG_HASKELL;
+	} else if (group.find ("languages/java") != string::npos) {
+		return PK_GROUP_ENUM_LANG_JAVA;
+	} else if (group.find ("languages/javascript") != string::npos) {
+		return PK_GROUP_ENUM_LANG_JAVASCRIPT;
+	} else if (group.find ("languages/nodejs") != string::npos) {
+		return PK_GROUP_ENUM_LANG_JAVASCRIPT;
+	} else if (group.find ("languages/lisp") != string::npos) {
+		return PK_GROUP_ENUM_LANG_LISP;
+	} else if (group.find ("languages/scheme") != string::npos) {
+		return PK_GROUP_ENUM_LANG_LISP;
+	} else if (group.find ("languages/ocaml") != string::npos) {
+		return PK_GROUP_ENUM_LANG_OCAML;
+	} else if (group.find ("languages/perl") != string::npos) {
+		return PK_GROUP_ENUM_LANG_PERL;
+	} else if (group.find ("languages/php") != string::npos) {
+		return PK_GROUP_ENUM_LANG_PHP;
+	} else if (group.find ("languages/python") != string::npos) {
+		return PK_GROUP_ENUM_LANG_PYTHON;
+	} else if (group.find ("languages/ruby") != string::npos) {
+		return PK_GROUP_ENUM_LANG_RUBY;
+	} else if (group.find ("languages/rust") != string::npos) {
+		return PK_GROUP_ENUM_LANG_RUST;
 	} else if (group.find ("development") != string::npos) {
 		return PK_GROUP_ENUM_PROGRAMMING;
+	} else if (group.find ("system/libraries") != string::npos) {
+		return PK_GROUP_ENUM_LIBRARIES;
+	} else if (group.find ("system/shells") != string::npos) {
+		return PK_GROUP_ENUM_SHELLS;
 	} else if (group.find ("hardware") != string::npos) {
 		return PK_GROUP_ENUM_SYSTEM;
 	} else if (group.find ("archiving") != string::npos
@@ -862,16 +905,17 @@ get_enum_group (const string &group_)
 		  || group.find("system/monitoring") != string::npos
 		  || group.find("databases") != string::npos
 		  || group.find("system/management") != string::npos) {
-		return PK_GROUP_ENUM_ADMIN_TOOLS;
+		return PK_GROUP_ENUM_ADMIN;
 	} else if (group.find ("graphics") != string::npos) {
 		return PK_GROUP_ENUM_GRAPHICS;
 	} else if (group.find ("multimedia") != string::npos) {
 		return PK_GROUP_ENUM_MULTIMEDIA;
 	} else if (group.find ("network") != string::npos) {
 		return PK_GROUP_ENUM_NETWORK;
+	} else if (group.find ("editors") != string::npos) {
+		return PK_GROUP_ENUM_EDITORS;
 	} else if (group.find ("office") != string::npos
-		  || group.find("text") != string::npos
-		  || group.find("editors") != string::npos) {
+		  || group.find("text") != string::npos) {
 		return PK_GROUP_ENUM_OFFICE;
 	} else if (group.find ("publishing") != string::npos) {
 		return PK_GROUP_ENUM_PUBLISHING;
@@ -883,9 +927,8 @@ get_enum_group (const string &group_)
 		return PK_GROUP_ENUM_DESKTOP_GNOME;
 	} else if (group.find ("kde") != string::npos) {
 		return PK_GROUP_ENUM_DESKTOP_KDE;
-	} else if (group.find ("xfce") != string::npos) {
-		return PK_GROUP_ENUM_DESKTOP_XFCE;
-	} else if (group.find ("gui/other") != string::npos) {
+	} else if (group.find ("xfce") != string::npos
+		  || group.find ("gui/other") != string::npos) {
 		return PK_GROUP_ENUM_DESKTOP_OTHER;
 	} else if (group.find ("localization") != string::npos) {
 		return PK_GROUP_ENUM_LOCALIZATION;
@@ -966,7 +1009,7 @@ zypp_package_is_local (const gchar *package_id)
 		return false;
 
 	gchar **id_parts = pk_package_id_split (package_id);
-	if (!strncmp (id_parts[PK_PACKAGE_ID_DATA], "local", 5))
+	if (!strncmp (id_parts[PK_PACKAGE_ID_ORIGIN], "local", 5))
 		ret = true;
 
 	g_strfreev (id_parts);
@@ -1020,15 +1063,15 @@ zypp_get_package_by_id (const gchar *package_id)
 		}
 
 		if (!pkg.isSystem()) {
-			if (!strncmp(id_parts[PK_PACKAGE_ID_DATA], "installed", 9)) {
+			if (g_strcmp0(id_parts[PK_PACKAGE_ID_DATA], "installed") == 0) {
 				//MIL << "pkg is not installed\n";
 				continue;
 			}
-			if (g_strcmp0(pkg.repository().alias().c_str(), id_parts[PK_PACKAGE_ID_DATA])) {
+			if (g_strcmp0(pkg.repository().alias().c_str(), id_parts[PK_PACKAGE_ID_ORIGIN])) {
 				//MIL << "repo does not match\n";
 				continue;
 			}
-		} else if (strncmp(id_parts[PK_PACKAGE_ID_DATA], "installed", 9)) {
+		} else if (g_strcmp0(id_parts[PK_PACKAGE_ID_DATA], "installed") != 0) {
 			//MIL << "pkg installed\n";
 			continue;
 		}
@@ -1215,25 +1258,28 @@ zypp_filter_solvable (PkBitfield filters, const sat::Solvable &item)
 }
 
 /**
-  * helper to emit pk package signals for a backend for a zypp solvable
+  * helper to stage a zypp solvable as PkPackage into an array of packages
+  * to be emitted later with pk_backend_job_packages()
   */
 static void
-zypp_backend_package (PkBackendJob *job, PkInfoEnum info,
-		      const sat::Solvable &pkg,
-		      const char *opt_summary)
+zypp_backend_stage_package (GPtrArray *packages, PkInfoEnum info,
+			    const sat::Solvable &pkg,
+			    const char *opt_summary,
+			    PkInfoEnum update_severity = PK_INFO_ENUM_UNKNOWN)
 {
 	gchar *id = zypp_build_package_id_from_resolvable (pkg);
-	pk_backend_job_package (job, info, id, opt_summary);
+
+	pk_backend_packages_add (packages, info, id, opt_summary, update_severity);
 	g_free (id);
 }
 
 /*
- * Emit signals for the packages, -but- if we have an installed package
+ * Stage the packages for emission, -but- if we have an installed package
  * we don't notify the client that the package is also available, since
  * PK doesn't handle re-installs (by some quirk).
  */
 static void
-zypp_emit_filtered_packages_in_list (PkBackendJob *job, PkBitfield filters, const vector<sat::Solvable> &v)
+zypp_stage_filtered_packages_in_list (GPtrArray *packages, PkBitfield filters, const vector<sat::Solvable> &v)
 {
 	typedef vector<sat::Solvable>::const_iterator sat_it_t;
 
@@ -1245,8 +1291,8 @@ zypp_emit_filtered_packages_in_list (PkBackendJob *job, PkBitfield filters, cons
 		    zypp_filter_solvable (filters, *it))
 			continue;
 
-		zypp_backend_package (job, PK_INFO_ENUM_INSTALLED, *it,
-				      make<ResObject>(*it)->summary().c_str());
+		zypp_backend_stage_package (packages, PK_INFO_ENUM_INSTALLED, *it,
+					    make<ResObject>(*it)->summary().c_str());
 		installed.push_back (*it);
 	}
 
@@ -1265,10 +1311,22 @@ zypp_emit_filtered_packages_in_list (PkBackendJob *job, PkBitfield filters, cons
 				  !isKind<SrcPackage>(*i));
 		}
 		if (!match) {
-			zypp_backend_package (job, PK_INFO_ENUM_AVAILABLE, *it,
-					      make<ResObject>(*it)->summary().c_str());
+			zypp_backend_stage_package (packages, PK_INFO_ENUM_AVAILABLE, *it,
+						    make<ResObject>(*it)->summary().c_str());
 		}
 	}
+}
+
+/*
+ * Emit the filtered packages in the list in one go.
+ */
+static void
+zypp_emit_filtered_packages_in_list (PkBackendJob *job, PkBitfield filters, const vector<sat::Solvable> &v)
+{
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
+
+	zypp_stage_filtered_packages_in_list (packages, filters, v);
+	pk_backend_job_packages (job, packages);
 }
 
 static gboolean
@@ -1468,10 +1526,12 @@ zypp_check_restart (PkRestartEnum *restart, Patch::constPtr patch)
 }
 
 /**
-  * helper to emit pk package status signals based on a ResPool object
+  * helper to stage pk package status information based on a ResPool object;
+  * the staged packages have to be emitted with pk_backend_job_packages() by the caller
   */
 static bool
 zypp_backend_pool_item_notify (PkBackendJob  *job,
+			       GPtrArray      *packages,
 			       const PoolItem &item,
 			       gboolean sanity_check = FALSE)
 {
@@ -1491,6 +1551,9 @@ zypp_backend_pool_item_notify (PkBackendJob  *job,
 		const string &name = item.satSolvable().name();
 		if (name == "glibc" || name == "PackageKit" ||
 		    name == "rpm" || name == "libzypp") {
+			// emit what we have so far, so the error code follows the packages
+			pk_backend_job_packages (job, packages);
+			g_ptr_array_set_size (packages, 0);
 			pk_backend_job_error_code (job, PK_ERROR_ENUM_CANNOT_REMOVE_SYSTEM_PACKAGE,
 					       "The package %s is essential to correct operation and cannot be removed using this tool.",
 					       name.c_str());
@@ -1502,7 +1565,7 @@ zypp_backend_pool_item_notify (PkBackendJob  *job,
 	// Summary.cc (readPool) to generate _DOWNGRADING types ?
 	if (status != PK_INFO_ENUM_UNKNOWN) {
 		const string &summary = item.resolvable ()->summary ();
-		zypp_backend_package (job, status, item.resolvable()->satSolvable(), summary.c_str ());
+		zypp_backend_stage_package (packages, status, item.resolvable()->satSolvable(), summary.c_str ());
 	}
 	return true;
 }
@@ -1584,6 +1647,7 @@ zypp_perform_execution (PkBackendJob *job, ZYpp::Ptr zypp, PerformType type, gbo
 
 			MIL << "simulating" << endl;
 
+			GPtrArray *packages = g_ptr_array_new_with_free_func (g_object_unref);
 			for (ResPool::const_iterator it = pool.begin (); it != pool.end (); ++it) {
 				switch (type) {
 				case REMOVE:
@@ -1603,10 +1667,12 @@ zypp_perform_execution (PkBackendJob *job, ZYpp::Ptr zypp, PerformType type, gbo
 					break;
 				}
 
-				if (!zypp_backend_pool_item_notify (job, *it, TRUE))
+				if (!zypp_backend_pool_item_notify (job, packages, *it, TRUE))
 					ret = FALSE;
 				it->statusReinit ();
 			}
+			pk_backend_job_packages (job, packages);
+			g_ptr_array_unref (packages);
 			goto exit;
 		}
 
@@ -1959,6 +2025,7 @@ backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 
 	ResPool pool = zypp_build_pool (zypp, true);
 	PoolStatusSaver saver;
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 	for (uint i = 0; package_ids[i]; i++) {
 		sat::Solvable solvable = zypp_get_package_by_id (package_ids[i]);
 
@@ -2002,11 +2069,13 @@ backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 				it != pool.byKindEnd (ResKind::package); ++it) {
 
 			if (!error && !zypp_filter_solvable (_filters, it->resolvable()->satSolvable()))
-				error = !zypp_backend_pool_item_notify (job, *it);
+				error = !zypp_backend_pool_item_notify (job, packages, *it);
 		}
 
 		solver.setForceResolve (false);
 	}
+
+	pk_backend_job_packages (job, packages);
 }
 
 /**
@@ -2025,15 +2094,30 @@ PkBitfield
 pk_backend_get_groups (PkBackend *backend)
 {
 	return pk_bitfield_from_enums (
-		PK_GROUP_ENUM_ADMIN_TOOLS,
+		PK_GROUP_ENUM_ADMIN,
 		PK_GROUP_ENUM_COMMUNICATION,
+		PK_GROUP_ENUM_DEBUG,
+		PK_GROUP_ENUM_DEVEL,
+		PK_GROUP_ENUM_EDITORS,
 		PK_GROUP_ENUM_DESKTOP_GNOME,
 		PK_GROUP_ENUM_DESKTOP_KDE,
 		PK_GROUP_ENUM_DESKTOP_OTHER,
-		PK_GROUP_ENUM_DESKTOP_XFCE,
 		PK_GROUP_ENUM_EDUCATION,
 		PK_GROUP_ENUM_GAMES,
 		PK_GROUP_ENUM_GRAPHICS,
+		PK_GROUP_ENUM_LANG_C,
+		PK_GROUP_ENUM_LANG_GO,
+		PK_GROUP_ENUM_LANG_HASKELL,
+		PK_GROUP_ENUM_LANG_JAVA,
+		PK_GROUP_ENUM_LANG_JAVASCRIPT,
+		PK_GROUP_ENUM_LANG_LISP,
+		PK_GROUP_ENUM_LANG_OCAML,
+		PK_GROUP_ENUM_LANG_PERL,
+		PK_GROUP_ENUM_LANG_PHP,
+		PK_GROUP_ENUM_LANG_PYTHON,
+		PK_GROUP_ENUM_LANG_RUBY,
+		PK_GROUP_ENUM_LANG_RUST,
+		PK_GROUP_ENUM_LIBRARIES,
 		PK_GROUP_ENUM_LOCALIZATION,
 		PK_GROUP_ENUM_MULTIMEDIA,
 		PK_GROUP_ENUM_NETWORK,
@@ -2041,6 +2125,7 @@ pk_backend_get_groups (PkBackend *backend)
 		PK_GROUP_ENUM_PROGRAMMING,
 		PK_GROUP_ENUM_PUBLISHING,
 		PK_GROUP_ENUM_SECURITY,
+		PK_GROUP_ENUM_SHELLS,
 		PK_GROUP_ENUM_SYSTEM,
 		-1);
 }
@@ -2086,6 +2171,7 @@ backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 
 	MIL << package_ids[0] << " " << pk_filter_bitfield_to_string (_filters) << endl;
 
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 	try
 	{
 		sat::Solvable solvable = zypp_get_package_by_id(package_ids[0]);
@@ -2181,11 +2267,12 @@ backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 				 zypp_filter_solvable (_filters, it->second) ? "don't add" : "add" );
 
 			if (!zypp_filter_solvable (_filters, it->second)) {
-				zypp_backend_package (job, info, it->second,
-						      item->summary ().c_str());
+				zypp_backend_stage_package (packages, info, it->second,
+							    item->summary ().c_str());
 			}
 		}
 
+		pk_backend_job_packages (job, packages);
 		pk_backend_job_set_percentage (job, 100);
 	} catch (const repo::RepoNotFoundException &ex) {
 		zypp_backend_finished_error (
@@ -2542,6 +2629,7 @@ backend_get_updates_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 
 	pk_backend_job_set_percentage (job, 80);
 
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 	pi_it_t cb = candidates.begin (), ce = candidates.end (), ci;
 	for (ci = cb; ci != ce; ++ci) {
 		ResObject::constPtr res = ci->resolvable();
@@ -2570,11 +2658,12 @@ backend_get_updates_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 			// causing the update to show empty package lines, comment for now
 			// res->summary ().c_str ());
 			// Test if this still happens!
-			zypp_backend_package (job, infoEnum, res->satSolvable (),
-					      res->summary ().c_str ());
+			zypp_backend_stage_package (packages, infoEnum, res->satSolvable (),
+						    res->summary ().c_str (), infoEnum);
 		}
 	}
 
+	pk_backend_job_packages (job, packages);
 	pk_backend_job_set_percentage (job, 100);
 }
 
@@ -2715,6 +2804,7 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 
 	zypp_build_pool (zypp, TRUE);
 
+	g_autoptr(GPtrArray) update_details = g_ptr_array_new_with_free_func (g_object_unref);
 	for (uint i = 0; package_ids[i]; i++) {
 		sat::Solvable solvable = zypp_get_package_by_id (package_ids[i]);
 		MIL << package_ids[i] << " " << solvable << endl;
@@ -2762,25 +2852,28 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 		g_ptr_array_add(obsoletes, NULL);
 		g_ptr_array_add(vendor_urls, NULL);
 
-		pk_backend_job_update_detail (job,
-					  package_ids[i],
-					  NULL,		// updates TODO with Resolver.installs
-					  (gchar **)obsoletes->pdata,
-					  (gchar **)vendor_urls->pdata,
-					  (gchar **)bugzilla->pdata,	// bugzilla
-					  (gchar **)cve->pdata,		// cve
-					  restart,	// restart -flag
-					  make<ResObject>(solvable)->description().c_str (),	// update-text
-					  NULL,		// ChangeLog text
-					  PK_UPDATE_STATE_ENUM_UNKNOWN,		// state of the update
-					  NULL, // date that the update was issued
-					  NULL);	// date that the update was updated
+		PkUpdateDetail *item = pk_update_detail_new_full (
+			package_ids[i],
+			NULL,		// updates TODO with Resolver.installs
+			(gchar **)obsoletes->pdata,
+			(gchar **)vendor_urls->pdata,
+			(gchar **)bugzilla->pdata,	// bugzilla
+			(gchar **)cve->pdata,		// cve
+			restart,	// restart -flag
+			make<ResObject>(solvable)->description().c_str (),	// update-text
+			NULL,		// ChangeLog text
+			PK_UPDATE_STATE_ENUM_UNKNOWN,		// state of the update
+			NULL, // date that the update was issued
+			NULL);	// date that the update was updated
+		g_ptr_array_add (update_details, item);
 
 		g_ptr_array_unref(obsoletes);
 		g_ptr_array_unref(vendor_urls);
 		g_ptr_array_unref(bugzilla);
 		g_ptr_array_unref(cve);
 	}
+
+	pk_backend_job_update_details (job, update_details);
 }
 
 /**
@@ -3084,6 +3177,7 @@ backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 
 	zypp_build_pool (zypp, TRUE);
 
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 	for (uint i = 0; search[i]; i++) {
 		MIL << search[i] << " " << pk_filter_bitfield_to_string(_filters) << endl;
 		vector<sat::Solvable> v;
@@ -3152,8 +3246,10 @@ backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 			}
 		}
 
-		zypp_emit_filtered_packages_in_list (job, _filters, pkgs);
+		zypp_stage_filtered_packages_in_list (packages, _filters, pkgs);
 	}
+
+	pk_backend_job_packages (job, packages);
 }
 
 void
@@ -3854,6 +3950,7 @@ backend_what_provides_thread (PkBackendJob *job, GVariant *params, gpointer user
 
 	ResPool pool = zypp_build_pool (zypp, true);
 
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 	if(g_ascii_strcasecmp("drivers_for_attached_hardware", values[0]) == 0) {
 		// solver run
 		Resolver solver(pool);
@@ -3883,8 +3980,8 @@ backend_what_provides_thread (PkBackendJob *job, GVariant *params, gpointer user
 			}
 
 			if (hit && !zypp_filter_solvable (_filters, it->resolvable()->satSolvable())) {
-				zypp_backend_package (job, status, it->resolvable()->satSolvable(),
-						      it->resolvable ()->summary ().c_str ());
+				zypp_backend_stage_package (packages, status, it->resolvable()->satSolvable(),
+							    it->resolvable ()->summary ().c_str ());
 			}
 			it->statusReinit ();
 		}
@@ -3918,12 +4015,14 @@ backend_what_provides_thread (PkBackendJob *job, GVariant *params, gpointer user
 					continue;
 
 				PkInfoEnum info = it->isSystem () ? PK_INFO_ENUM_INSTALLED : PK_INFO_ENUM_AVAILABLE;
-				zypp_backend_package (job, info, *it,  make<ResObject>(*it)->summary().c_str ());
+				zypp_backend_stage_package (packages, info, *it,  make<ResObject>(*it)->summary().c_str ());
 			}
 		}
 
 		g_hash_table_unref (installed_hash);
 	}
+
+	pk_backend_job_packages (job, packages);
 }
 
 /**
@@ -4013,7 +4112,7 @@ backend_download_packages_thread (PkBackendJob *job, GVariant *params, gpointer 
 			const gchar *to_strv[] = { NULL, NULL };
 			to_strv[0] =  target.c_str();
 			pk_backend_job_files (job, package_ids[i],(gchar **) to_strv);
-			pk_backend_job_package (job, PK_INFO_ENUM_DOWNLOADING, package_ids[i], item->summary ().c_str());
+			pk_backend_job_package_status (job, package_ids[i], PK_INFO_ENUM_DOWNLOADING);
 		}
 	} catch (const Exception &ex) {
 		zypp_backend_finished_error (
@@ -4123,7 +4222,7 @@ ZyppBackend::ZyppBackendReceiver::zypp_signature_required (const PublicKey &key)
 						   "Repository unknown");
 		else {
 			pk_backend_job_repo_signature_required (_job,
-								"dummy;0.0.1;i386;data",
+								"dummy;0.0.1;i386;;",
 								_repoName,
 								info.baseUrlsBegin ()->asString ().c_str (),
 								key.name ().c_str (),
@@ -4156,7 +4255,7 @@ ZyppBackend::ZyppBackendReceiver::zypp_signature_required (const string &file, c
 					       "Repository unknown");
 		else {
 			pk_backend_job_repo_signature_required (_job,
-				"dummy;0.0.1;i386;data",
+				"dummy;0.0.1;i386;;",
 				_repoName,
 				info.baseUrlsBegin ()->asString ().c_str (),
 				id.c_str (),
@@ -4189,7 +4288,7 @@ ZyppBackend::ZyppBackendReceiver::zypp_signature_required (const string &file)
 					       "Repository unknown");
 		else {
 			pk_backend_job_repo_signature_required (_job,
-				"dummy;0.0.1;i386;data",
+				"dummy;0.0.1;i386;;",
 				_repoName,
 				info.baseUrlsBegin ()->asString ().c_str (),
 				"UNKNOWN",

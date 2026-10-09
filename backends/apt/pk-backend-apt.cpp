@@ -7,9 +7,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -18,8 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdio.h>
@@ -27,7 +26,7 @@
 
 #include <config.h>
 #include <pk-backend.h>
-#include <packagekit-glib2/pk-debug.h>
+#include <pk-debug.h>
 
 #include <apt-pkg/aptconfiguration.h>
 #include <apt-pkg/error.h>
@@ -84,6 +83,10 @@ void pk_backend_initialize(GKeyFile *conf, PkBackend *backend)
     if (!pkgInitSystem(*_config, _system)) {
         g_debug("ERROR initializing backend system");
     }
+
+    // Select the new solver
+    if (APT_PKG_ABI >= 700)
+        _config->Set("APT::Solver", "3.0");
 }
 
 void pk_backend_destroy(PkBackend *backend)
@@ -94,27 +97,48 @@ void pk_backend_destroy(PkBackend *backend)
 PkBitfield pk_backend_get_groups(PkBackend *backend)
 {
     return pk_bitfield_from_enums(
-        PK_GROUP_ENUM_ACCESSORIES,
-        PK_GROUP_ENUM_ADMIN_TOOLS,
+        PK_GROUP_ENUM_ADMIN,
         PK_GROUP_ENUM_COMMUNICATION,
-        PK_GROUP_ENUM_DOCUMENTATION,
+        PK_GROUP_ENUM_DATABASES,
+        PK_GROUP_ENUM_DEBUG,
         PK_GROUP_ENUM_DESKTOP_GNOME,
         PK_GROUP_ENUM_DESKTOP_KDE,
         PK_GROUP_ENUM_DESKTOP_OTHER,
+        PK_GROUP_ENUM_DEVEL,
+        PK_GROUP_ENUM_DOCUMENTATION,
+        PK_GROUP_ENUM_EDITORS,
+        PK_GROUP_ENUM_EDUCATION,
         PK_GROUP_ENUM_ELECTRONICS,
         PK_GROUP_ENUM_FONTS,
         PK_GROUP_ENUM_GAMES,
         PK_GROUP_ENUM_GRAPHICS,
         PK_GROUP_ENUM_INTERNET,
+        PK_GROUP_ENUM_LANG_GO,
+        PK_GROUP_ENUM_LANG_HASKELL,
+        PK_GROUP_ENUM_LANG_JAVA,
+        PK_GROUP_ENUM_LANG_JAVASCRIPT,
+        PK_GROUP_ENUM_LANG_LISP,
+        PK_GROUP_ENUM_LANG_OCAML,
+        PK_GROUP_ENUM_LANG_PERL,
+        PK_GROUP_ENUM_LANG_PHP,
+        PK_GROUP_ENUM_LANG_PYTHON,
+        PK_GROUP_ENUM_LANG_RUBY,
+        PK_GROUP_ENUM_LANG_RUST,
         PK_GROUP_ENUM_LEGACY,
+        PK_GROUP_ENUM_LIBRARIES,
         PK_GROUP_ENUM_LOCALIZATION,
+        PK_GROUP_ENUM_META,
         PK_GROUP_ENUM_MULTIMEDIA,
         PK_GROUP_ENUM_NETWORK,
         PK_GROUP_ENUM_OTHER,
         PK_GROUP_ENUM_PROGRAMMING,
         PK_GROUP_ENUM_PUBLISHING,
         PK_GROUP_ENUM_SCIENCE,
+        PK_GROUP_ENUM_SERVERS,
+        PK_GROUP_ENUM_SHELLS,
         PK_GROUP_ENUM_SYSTEM,
+        PK_GROUP_ENUM_UTILITIES,
+        PK_GROUP_ENUM_VIRTUALIZATION,
         -1);
 }
 
@@ -141,7 +165,7 @@ PkBitfield pk_backend_get_filters(PkBackend *backend)
 
 gchar **pk_backend_get_mime_types(PkBackend *backend)
 {
-    const gchar *mime_types[] = {"application/vnd.debian.binary-package", "application/x-deb", NULL};
+    const gchar *mime_types[] = {"application/vnd.debian.binary-package", "application/x-deb", nullptr};
     return g_strdupv((gchar **)mime_types);
 }
 
@@ -159,7 +183,7 @@ void pk_backend_stop_job(PkBackend *backend, PkBackendJob *job)
         delete apt;
 
     /* make debugging easier */
-    pk_backend_job_set_user_data(job, NULL);
+    pk_backend_job_set_user_data(job, nullptr);
 }
 
 void pk_backend_cancel(PkBackend *backend, PkBackendJob *job)
@@ -227,7 +251,7 @@ void pk_backend_depends_on(
     gchar **package_ids,
     gboolean recursive)
 {
-    pk_backend_job_thread_create(job, backend_depends_on_or_requires_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_depends_on_or_requires_thread, nullptr, nullptr);
 }
 
 void pk_backend_required_by(
@@ -237,7 +261,7 @@ void pk_backend_required_by(
     gchar **package_ids,
     gboolean recursive)
 {
-    pk_backend_job_thread_create(job, backend_depends_on_or_requires_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_depends_on_or_requires_thread, nullptr, nullptr);
 }
 
 static void backend_get_files_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -253,7 +277,7 @@ static void backend_get_files_thread(PkBackendJob *job, GVariant *params, gpoint
         return;
     }
 
-    if (package_ids == NULL) {
+    if (package_ids == nullptr) {
         pk_backend_job_error_code(job, PK_ERROR_ENUM_PACKAGE_ID_INVALID, "Invalid package id");
         return;
     }
@@ -278,7 +302,7 @@ static void backend_get_files_thread(PkBackendJob *job, GVariant *params, gpoint
 
 void pk_backend_get_files(PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 {
-    pk_backend_job_thread_create(job, backend_get_files_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_files_thread, nullptr, nullptr);
 }
 
 static void backend_get_details_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -317,17 +341,17 @@ static void backend_get_details_thread(PkBackendJob *job, GVariant *params, gpoi
 
 void pk_backend_get_update_detail(PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 {
-    pk_backend_job_thread_create(job, backend_get_details_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_details_thread, nullptr, nullptr);
 }
 
 void pk_backend_get_details(PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 {
-    pk_backend_job_thread_create(job, backend_get_details_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_details_thread, nullptr, nullptr);
 }
 
 void pk_backend_get_details_local(PkBackend *backend, PkBackendJob *job, gchar **files)
 {
-    pk_backend_job_thread_create(job, backend_get_details_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_details_thread, nullptr, nullptr);
 }
 
 static void backend_get_files_local_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -342,7 +366,7 @@ static void backend_get_files_local_thread(PkBackendJob *job, GVariant *params, 
 
 void pk_backend_get_files_local(PkBackend *backend, PkBackendJob *job, gchar **files)
 {
-    pk_backend_job_thread_create(job, backend_get_files_local_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_files_local_thread, nullptr, nullptr);
 }
 
 static void backend_get_updates_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -378,7 +402,7 @@ static void backend_get_updates_thread(PkBackendJob *job, GVariant *params, gpoi
 
 void pk_backend_get_updates(PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
-    pk_backend_job_thread_create(job, backend_get_updates_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_updates_thread, nullptr, nullptr);
 }
 
 static void backend_what_provides_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -414,7 +438,7 @@ static void backend_what_provides_thread(PkBackendJob *job, GVariant *params, gp
  */
 void pk_backend_what_provides(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
-    pk_backend_job_thread_create(job, backend_what_provides_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_what_provides_thread, nullptr, nullptr);
 }
 
 /**
@@ -499,7 +523,7 @@ static void pk_backend_download_packages_thread(PkBackendJob *job, GVariant *par
 
                 gchar **files = (gchar **)g_malloc(2 * sizeof(gchar *));
                 files[0] = g_strdup_printf("%s/%s", directory.c_str(), std::string{flNotDir(storeFileName)}.c_str());
-                files[1] = NULL;
+                files[1] = nullptr;
                 pk_backend_job_files(job, pi, files);
                 g_strfreev(files);
             }
@@ -518,7 +542,7 @@ static void pk_backend_download_packages_thread(PkBackendJob *job, GVariant *par
 
 void pk_backend_download_packages(PkBackend *backend, PkBackendJob *job, gchar **package_ids, const gchar *directory)
 {
-    pk_backend_job_thread_create(job, pk_backend_download_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, pk_backend_download_packages_thread, nullptr, nullptr);
 }
 
 static void pk_backend_refresh_cache_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -545,7 +569,7 @@ static void pk_backend_refresh_cache_thread(PkBackendJob *job, GVariant *params,
 
 void pk_backend_refresh_cache(PkBackend *backend, PkBackendJob *job, gboolean force)
 {
-    pk_backend_job_thread_create(job, pk_backend_refresh_cache_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, pk_backend_refresh_cache_thread, nullptr, nullptr);
 }
 
 static void pk_backend_resolve_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -570,7 +594,7 @@ static void pk_backend_resolve_thread(PkBackendJob *job, GVariant *params, gpoin
 
 void pk_backend_resolve(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **packages)
 {
-    pk_backend_job_thread_create(job, pk_backend_resolve_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, pk_backend_resolve_thread, nullptr, nullptr);
 }
 
 static void pk_backend_search_files_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -601,7 +625,7 @@ static void pk_backend_search_files_thread(PkBackendJob *job, GVariant *params, 
 
 void pk_backend_search_files(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
-    pk_backend_job_thread_create(job, pk_backend_search_files_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, pk_backend_search_files_thread, nullptr, nullptr);
 }
 
 static void backend_search_groups_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -627,7 +651,7 @@ static void backend_search_groups_thread(PkBackendJob *job, GVariant *params, gp
 
 void pk_backend_search_groups(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
-    pk_backend_job_thread_create(job, backend_search_groups_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_search_groups_thread, nullptr, nullptr);
 }
 
 static void backend_search_package_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -640,7 +664,7 @@ static void backend_search_package_thread(PkBackendJob *job, GVariant *params, g
     g_variant_get(params, "(t^a&s)", &filters, &values);
 
     if (*values) {
-        for (gint i = 0; values[i] != NULL; i++) {
+        for (gint i = 0; values[i] != nullptr; i++) {
             queries.push_back(values[i]);
         }
     }
@@ -675,29 +699,29 @@ static void backend_search_package_thread(PkBackendJob *job, GVariant *params, g
 
 void pk_backend_search_names(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
-    pk_backend_job_thread_create(job, backend_search_package_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_search_package_thread, nullptr, nullptr);
 }
 
 void pk_backend_search_details(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
-    pk_backend_job_thread_create(job, backend_search_package_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_search_package_thread, nullptr, nullptr);
 }
 
 static void backend_manage_packages_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 {
     // Transaction flags
     PkBitfield transaction_flags = 0;
-    gboolean allow_deps = false;
+    gboolean allowRemoveDeps = true;
     gboolean autoremove = false;
-    gchar **full_paths = NULL;
-    gchar **package_ids = NULL;
+    gchar **full_paths = nullptr;
+    gchar **package_ids = nullptr;
 
     // Get the transaction role since this method is called by install/remove/update/repair
     PkRoleEnum role = pk_backend_job_get_role(job);
     if (role == PK_ROLE_ENUM_INSTALL_FILES) {
         g_variant_get(params, "(t^a&s)", &transaction_flags, &full_paths);
     } else if (role == PK_ROLE_ENUM_REMOVE_PACKAGES) {
-        g_variant_get(params, "(t^a&sbb)", &transaction_flags, &package_ids, &allow_deps, &autoremove);
+        g_variant_get(params, "(t^a&sbb)", &transaction_flags, &package_ids, &allowRemoveDeps, &autoremove);
     } else if (role == PK_ROLE_ENUM_INSTALL_PACKAGES) {
         g_variant_get(params, "(t^a&s)", &transaction_flags, &package_ids);
     } else if (role == PK_ROLE_ENUM_UPDATE_PACKAGES) {
@@ -731,7 +755,12 @@ static void backend_manage_packages_thread(PkBackendJob *job, GVariant *params, 
         } else if (role == PK_ROLE_ENUM_UPDATE_PACKAGES) {
             PkgList downgradeIgnored; // FIXME: We likely shouldn't ignore downgrades here...
             if (!apt->resolvePackageUpdateIds(
-                    package_ids, updatePkgs, downgradeIgnored, installPkgs, removePkgs, removePkgs)) {
+                    package_ids,
+                    updatePkgs,
+                    downgradeIgnored,
+                    installPkgs,
+                    removePkgs,
+                    removePkgs)) {
                 // the resolve method already emitted the error message,
                 // we don't need to do anything else here
                 return;
@@ -740,7 +769,9 @@ static void backend_manage_packages_thread(PkBackendJob *job, GVariant *params, 
             installPkgs = apt->resolveLocalFiles(full_paths);
         } else {
             pk_backend_job_error_code(
-                job, PK_ERROR_ENUM_PACKAGE_NOT_FOUND, "Could not figure out what to do to apply the change.");
+                job,
+                PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
+                "Could not figure out what to do to apply the change.");
             return;
         }
 
@@ -751,7 +782,14 @@ static void backend_manage_packages_thread(PkBackendJob *job, GVariant *params, 
     }
 
     // Install/Update/Remove packages, or just simulate
-    bool ret = apt->runTransaction(installPkgs, removePkgs, updatePkgs, fixBroken, transaction_flags, autoremove);
+    bool ret = apt->runTransaction(
+        installPkgs,
+        removePkgs,
+        updatePkgs,
+        fixBroken,
+        transaction_flags,
+        autoremove,
+        allowRemoveDeps);
     if (!ret) {
         // Print transaction errors
         g_debug("AptJob::runTransaction() failed: %i", _error->PendingError());
@@ -765,7 +803,7 @@ void pk_backend_install_packages(
     PkBitfield transaction_flags,
     gchar **package_ids)
 {
-    pk_backend_job_thread_create(job, backend_manage_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_manage_packages_thread, nullptr, nullptr);
 }
 
 void pk_backend_update_packages(
@@ -774,12 +812,12 @@ void pk_backend_update_packages(
     PkBitfield transaction_flags,
     gchar **package_ids)
 {
-    pk_backend_job_thread_create(job, backend_manage_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_manage_packages_thread, nullptr, nullptr);
 }
 
 void pk_backend_install_files(PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **full_paths)
 {
-    pk_backend_job_thread_create(job, backend_manage_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_manage_packages_thread, nullptr, nullptr);
 }
 
 void pk_backend_remove_packages(
@@ -790,12 +828,12 @@ void pk_backend_remove_packages(
     gboolean allow_deps,
     gboolean autoremove)
 {
-    pk_backend_job_thread_create(job, backend_manage_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_manage_packages_thread, nullptr, nullptr);
 }
 
 void pk_backend_repair_system(PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags)
 {
-    pk_backend_job_thread_create(job, backend_manage_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_manage_packages_thread, nullptr, nullptr);
 }
 
 static void backend_repo_manager_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -834,7 +872,7 @@ static void backend_repo_manager_thread(PkBackendJob *job, GVariant *params, gpo
         return;
     }
 
-    for (SourcesList::SourceRecord *sourceRecord : sourcesList.SourceRecords) {
+    for (const auto &sourceRecord : sourcesList.SourceRecords) {
 
         if (sourceRecord->Type & SourcesList::Comment) {
             continue;
@@ -851,7 +889,10 @@ static void backend_repo_manager_thread(PkBackendJob *job, GVariant *params, gpo
             }
 
             pk_backend_job_repo_detail(
-                job, repoId.c_str(), sourceRecord->niceName().c_str(), !(sourceRecord->Type & SourcesList::Disabled));
+                job,
+                repoId.c_str(),
+                sourceRecord->niceName().c_str(),
+                !(sourceRecord->Type & SourcesList::Disabled));
         } else if (repoId.compare(repo_id) == 0) {
             // Found the repo to enable/disable
             found = true;
@@ -876,11 +917,18 @@ static void backend_repo_manager_thread(PkBackendJob *job, GVariant *params, gpo
                         return;
                     }
 
-                    PkgList removePkgs = apt->getPackagesFromRepo(sourceRecord);
+                    PkgList removePkgs = apt->getPackagesFromRepo(sourceRecord.get());
                     if (removePkgs.size() > 0) {
                         // Install/Update/Remove packages, or just simulate
                         bool ret;
-                        ret = apt->runTransaction(PkgList(), removePkgs, PkgList(), false, transaction_flags, false);
+                        ret = apt->runTransaction(
+                            PkgList(),
+                            removePkgs,
+                            PkgList(),
+                            false,
+                            transaction_flags,
+                            false,
+                            true);
                         if (!ret) {
                             // Print transaction errors
                             g_debug("AptJob::runTransaction() failed: %i", _error->PendingError());
@@ -891,7 +939,7 @@ static void backend_repo_manager_thread(PkBackendJob *job, GVariant *params, gpo
 
                 // Now if we are not simulating remove the repository
                 if (!pk_bitfield_contain(transaction_flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE)) {
-                    sourcesList.RemoveSource(sourceRecord);
+                    sourcesList.RemoveSource(sourceRecord.get());
 
                     // Commit changes
                     if (!sourcesList.UpdateSources()) {
@@ -914,12 +962,12 @@ static void backend_repo_manager_thread(PkBackendJob *job, GVariant *params, gpo
 
 void pk_backend_get_repo_list(PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
-    pk_backend_job_thread_create(job, backend_repo_manager_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_repo_manager_thread, nullptr, nullptr);
 }
 
 void pk_backend_repo_enable(PkBackend *backend, PkBackendJob *job, const gchar *repo_id, gboolean enabled)
 {
-    pk_backend_job_thread_create(job, backend_repo_manager_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_repo_manager_thread, nullptr, nullptr);
 }
 
 void pk_backend_repo_remove(
@@ -929,7 +977,7 @@ void pk_backend_repo_remove(
     const gchar *repo_id,
     gboolean autoremove)
 {
-    pk_backend_job_thread_create(job, backend_repo_manager_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_repo_manager_thread, nullptr, nullptr);
 }
 
 static void backend_get_packages_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
@@ -953,16 +1001,8 @@ static void backend_get_packages_thread(PkBackendJob *job, GVariant *params, gpo
 
 void pk_backend_get_packages(PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
-    pk_backend_job_thread_create(job, backend_get_packages_thread, NULL, NULL);
+    pk_backend_job_thread_create(job, backend_get_packages_thread, nullptr, nullptr);
 }
-
-/* TODO
-void
-pk_backend_get_categories (PkBackend *backend, PkBackendJob *job)
-{
-    pk_backend_job_thread_create (job, pk_backend_get_categories_thread, NULL, NULL);
-}
-*/
 
 PkBitfield pk_backend_get_roles(PkBackend *backend)
 {

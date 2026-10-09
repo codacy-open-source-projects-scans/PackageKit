@@ -19,8 +19,9 @@
  */
 
 #include "dnf5-backend-utils.hpp"
-#include <packagekit-glib2/pk-common-private.h>
-#include <packagekit-glib2/pk-update-detail.h>
+#include <pk-common-private.h>
+#include <pk-shared.h>
+#include <pk-update-detail.h>
 #include <libdnf5/conf/config_parser.hpp>
 #include <libdnf5/conf/const.hpp>
 #include <libdnf5/logger/logger.hpp>
@@ -37,37 +38,73 @@
 #include <queue>
 #include <filesystem>
 #include <map>
+#include <stdexcept>
+#include <cstring>
 #include "dnf5-backend-vendor.hpp"
 
-void
-dnf5_setup_base (PkBackendDnf5Private *priv, gboolean refresh, gboolean force, const char *releasever)
+/**
+ * A release version becomes a component of the metadata cache directory below
+ * /var/cache/PackageKit, which this backend writes to as root. When it upgrades
+ * the system, the release version is the distribution ID the client asked for,
+ * so it must name a single directory entry and nothing else. The daemon already
+ * rejects anything else, but the backend must not rely on being called through
+ * it.
+ */
+static bool
+dnf5_releasever_is_valid(const char *releasever)
 {
+	if (releasever == nullptr || releasever[0] == '\0')
+		return false;
+
+	// never an option, a relative path or a hidden directory
+	if (!g_ascii_isalnum(releasever[0]))
+		return false;
+
+	for (const char *c = releasever; *c != '\0'; c++) {
+		if (g_ascii_isalnum(*c))
+			continue;
+		if (*c == '.' || *c == '_' || *c == '+' || *c == '-')
+			continue;
+		return false;
+	}
+
+	// no path traversal, even though there is no directory separator left
+	return strstr(releasever, "..") == nullptr;
+}
+
+void
+dnf5_setup_base(PkBackendDnf5Private *priv, gboolean refresh, gboolean force, const char *releasever, gboolean online)
+{
+	if (releasever != nullptr && !dnf5_releasever_is_valid(releasever))
+		throw std::invalid_argument(std::string("Invalid release version: ") + releasever);
+
 	priv->base = std::make_unique<libdnf5::Base>();
 
 	priv->base->load_config();
 
 	auto &config = priv->base->get_config();
 	if (priv->conf != NULL) {
-		g_autofree gchar *destdir = g_key_file_get_string (priv->conf, "Daemon", "DestDir", NULL);
-		if (destdir != NULL) {
-			config.get_installroot_option().set(libdnf5::Option::Priority::COMMANDLINE, destdir);
+		g_autofree gchar *root_dir = pk_util_get_root_dir(priv->conf);
+		if (g_strcmp0(root_dir, "/") != 0) {
+			config.get_installroot_option().set(libdnf5::Option::Priority::COMMANDLINE, root_dir);
 		}
 
-		gboolean keep_cache = g_key_file_get_boolean (priv->conf, "Daemon", "KeepCache", NULL);
+		gboolean keep_cache = g_key_file_get_boolean(priv->conf, "Daemon", "KeepCache", NULL);
 		config.get_keepcache_option().set(libdnf5::Option::Priority::COMMANDLINE, keep_cache != FALSE);
 
 		g_autofree gchar *distro_version = NULL;
 		if (releasever == NULL) {
 			g_autoptr(GError) error = NULL;
-			distro_version = pk_get_distro_version_id (&error);
+			distro_version = pk_get_distro_version_id(&error);
 		} else {
 			distro_version = g_strdup(releasever);
 		}
 
 		if (distro_version != NULL) {
 			priv->base->get_vars()->set("releasever", distro_version);
-			const char *root = (destdir != NULL) ? destdir : "/";
-			g_autofree gchar *cache_dir = g_build_filename (root, "/var/cache/PackageKit", distro_version, "metadata", NULL);
+			const char *root = (root_dir != NULL) ? root_dir : "/";
+			g_autofree gchar *cache_dir =
+				g_build_filename(root, "/var/cache/PackageKit", distro_version, "metadata", NULL);
 			g_debug("Using cachedir: %s", cache_dir);
 			config.get_cachedir_option().set(libdnf5::Option::Priority::COMMANDLINE, cache_dir);
 		}
@@ -76,30 +113,36 @@ dnf5_setup_base (PkBackendDnf5Private *priv, gboolean refresh, gboolean force, c
 		auto &optional_metadata_types_setting = optional_metadata_types.get_value();
 		if (!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_ALL)) {
 			// Ensure all required repodata types are downloaded
-			if(!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_COMPS)) {
-				optional_metadata_types.add_item(libdnf5::Option::Priority::RUNTIME, libdnf5::METADATA_TYPE_COMPS);
+			if (!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_COMPS)) {
+				optional_metadata_types.add_item(
+					libdnf5::Option::Priority::RUNTIME,
+					libdnf5::METADATA_TYPE_COMPS);
 			}
-			if(!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_UPDATEINFO)) {
-				optional_metadata_types.add_item(libdnf5::Option::Priority::RUNTIME, libdnf5::METADATA_TYPE_UPDATEINFO);
+			if (!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_UPDATEINFO)) {
+				optional_metadata_types.add_item(
+					libdnf5::Option::Priority::RUNTIME,
+					libdnf5::METADATA_TYPE_UPDATEINFO);
 			}
-			if(!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_APPSTREAM)) {
-				optional_metadata_types.add_item(libdnf5::Option::Priority::RUNTIME, libdnf5::METADATA_TYPE_APPSTREAM);
+			if (!optional_metadata_types_setting.contains(libdnf5::METADATA_TYPE_APPSTREAM)) {
+				optional_metadata_types.add_item(
+					libdnf5::Option::Priority::RUNTIME,
+					libdnf5::METADATA_TYPE_APPSTREAM);
 			}
 		}
-		
+
 		// Always assume yes to avoid interactive prompts failing the transaction
 		// TODO: Drop this once InstallSignature is implemented
 		config.get_assumeyes_option().set(libdnf5::Option::Priority::COMMANDLINE, true);
 	}
 
 	priv->base->setup();
-	
+
 	// Ensure releasever is set AFTER setup() because setup() might run auto-detection and overwrite it.
 	if (priv->conf != NULL) {
 		g_autofree gchar *distro_version = NULL;
 		if (releasever == NULL) {
 			g_autoptr(GError) error = NULL;
-			distro_version = pk_get_distro_version_id (&error);
+			distro_version = pk_get_distro_version_id(&error);
 		} else {
 			distro_version = g_strdup(releasever);
 		}
@@ -107,7 +150,14 @@ dnf5_setup_base (PkBackendDnf5Private *priv, gboolean refresh, gboolean force, c
 			priv->base->get_vars()->set("releasever", distro_version);
 		}
 	}
-	
+
+	// online defaults to TRUE. Only change the configuration if the caller passed FALSE
+	if (!online) {
+		// When offline, use cache-only mode to avoid network errors
+		g_debug("Using cache-only mode (not refreshing metadata)");
+		config.get_cacheonly_option().set(libdnf5::Option::Priority::RUNTIME, "all");
+	}
+
 	auto repo_sack = priv->base->get_repo_sack();
 	repo_sack->create_repos_from_system_configuration();
 	repo_sack->get_system_repo();
@@ -133,13 +183,26 @@ dnf5_setup_base (PkBackendDnf5Private *priv, gboolean refresh, gboolean force, c
 }
 
 void
+dnf5_update_network_state(PkBackendDnf5Private *priv, gboolean online)
+{
+	auto &config = priv->base->get_config();
+	if (online) {
+		g_debug("Clearing cache-only mode (online)");
+		config.get_cacheonly_option().set(libdnf5::Option::Priority::RUNTIME, "none");
+	} else {
+		g_debug("Setting cache-only mode (offline)");
+		config.get_cacheonly_option().set(libdnf5::Option::Priority::RUNTIME, "all");
+	}
+}
+
+void
 dnf5_refresh_cache(PkBackendDnf5Private *priv, gboolean force)
 {
 	dnf5_setup_base(priv, TRUE, force);
 }
 
 PkInfoEnum
-dnf5_advisory_kind_to_info_enum (const std::string &type)
+dnf5_advisory_kind_to_info_enum(const std::string &type)
 {
 	if (type == "security")
 		return PK_INFO_ENUM_SECURITY;
@@ -153,7 +216,7 @@ dnf5_advisory_kind_to_info_enum (const std::string &type)
 }
 
 PkInfoEnum
-dnf5_update_severity_to_enum (const std::string &severity)
+dnf5_update_severity_to_enum(const std::string &severity)
 {
 	if (severity == "low")
 		return PK_INFO_ENUM_LOW;
@@ -167,67 +230,67 @@ dnf5_update_severity_to_enum (const std::string &severity)
 }
 
 bool
-dnf5_force_distupgrade_on_upgrade (libdnf5::Base &base)
+dnf5_force_distupgrade_on_upgrade(libdnf5::Base &base)
 {
-	std::vector<std::string> distroverpkg_names = { "system-release", "distribution-release" };
-	std::vector<std::string> distupgrade_provides = { "system-upgrade(dsync)", "product-upgrade() = dup" };
+	std::vector<std::string> distroverpkg_names = {"system-release", "distribution-release"};
+	std::vector<std::string> distupgrade_provides = {"system-upgrade(dsync)", "product-upgrade() = dup"};
 
 	libdnf5::rpm::PackageQuery query(base);
 	query.filter_installed();
-	query.filter_name(distroverpkg_names);
+	query.filter_provides(distroverpkg_names);
 	query.filter_provides(distupgrade_provides);
 
 	return !query.empty();
 }
 
 bool
-dnf5_repo_is_devel (const libdnf5::repo::Repo &repo)
+dnf5_repo_is_devel(const libdnf5::repo::Repo &repo)
 {
 	std::string id = repo.get_id();
 	return (id.ends_with("-debuginfo") || id.ends_with("-debugsource") || id.ends_with("-devel"));
 }
 
 bool
-dnf5_repo_is_source (const libdnf5::repo::Repo &repo)
+dnf5_repo_is_source(const libdnf5::repo::Repo &repo)
 {
 	std::string id = repo.get_id();
 	return id.ends_with("-source");
 }
 
 bool
-dnf5_repo_is_supported (const libdnf5::repo::Repo &repo)
+dnf5_repo_is_supported(const libdnf5::repo::Repo &repo)
 {
 	return dnf5_validate_supported_repo(repo.get_id());
 }
 
 bool
-dnf5_backend_pk_repo_filter (const libdnf5::repo::Repo &repo, PkBitfield filters)
+dnf5_backend_pk_repo_filter(const libdnf5::repo::Repo &repo, PkBitfield filters)
 {
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_DEVELOPMENT) && !dnf5_repo_is_devel (repo))
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_DEVELOPMENT) && !dnf5_repo_is_devel(repo))
 		return false;
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_DEVELOPMENT) && dnf5_repo_is_devel (repo))
-		return false;
-
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_SOURCE) && !dnf5_repo_is_source (repo))
-		return false;
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_SOURCE) && dnf5_repo_is_source (repo))
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_DEVELOPMENT) && dnf5_repo_is_devel(repo))
 		return false;
 
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_INSTALLED) && !repo.is_enabled())
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_SOURCE) && !dnf5_repo_is_source(repo))
 		return false;
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_INSTALLED) && repo.is_enabled())
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_SOURCE) && dnf5_repo_is_source(repo))
 		return false;
 
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_SUPPORTED) && !dnf5_repo_is_supported (repo))
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_INSTALLED) && !repo.is_enabled())
 		return false;
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_SUPPORTED) && dnf5_repo_is_supported (repo))
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_INSTALLED) && repo.is_enabled())
+		return false;
+
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_SUPPORTED) && !dnf5_repo_is_supported(repo))
+		return false;
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_SUPPORTED) && dnf5_repo_is_supported(repo))
 		return false;
 
 	return true;
 }
 
 bool
-dnf5_package_is_gui (const libdnf5::rpm::Package &pkg)
+dnf5_package_is_gui(const libdnf5::rpm::Package &pkg)
 {
 	for (const auto &provide : pkg.get_provides()) {
 		std::string name = provide.get_name();
@@ -238,24 +301,24 @@ dnf5_package_is_gui (const libdnf5::rpm::Package &pkg)
 }
 
 bool
-dnf5_package_filter (const libdnf5::rpm::Package &pkg, PkBitfield filters)
+dnf5_package_filter(const libdnf5::rpm::Package &pkg, PkBitfield filters)
 {
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_GUI) && !dnf5_package_is_gui (pkg))
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_GUI) && !dnf5_package_is_gui(pkg))
 		return false;
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_GUI) && dnf5_package_is_gui (pkg))
-		return false;
-
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_DOWNLOADED) && !pkg.is_available_locally())
-		return false;
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_DOWNLOADED) && pkg.is_available_locally())
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_GUI) && dnf5_package_is_gui(pkg))
 		return false;
 
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_DEVELOPMENT) ||
-	    pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_DEVELOPMENT) ||
-	    pk_bitfield_contain (filters, PK_FILTER_ENUM_SOURCE) ||
-	    pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_SOURCE) ||
-	    pk_bitfield_contain (filters, PK_FILTER_ENUM_SUPPORTED) ||
-	    pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_SUPPORTED)) {
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_DOWNLOADED) && !pkg.is_available_locally())
+		return false;
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_DOWNLOADED) && pkg.is_available_locally())
+		return false;
+
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_DEVELOPMENT)
+	    || pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_DEVELOPMENT)
+	    || pk_bitfield_contain(filters, PK_FILTER_ENUM_SOURCE)
+	    || pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_SOURCE)
+	    || pk_bitfield_contain(filters, PK_FILTER_ENUM_SUPPORTED)
+	    || pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_SUPPORTED)) {
 		auto repo_weak = pkg.get_repo();
 		if (repo_weak.is_valid()) {
 			if (!dnf5_backend_pk_repo_filter(*repo_weak, filters))
@@ -267,38 +330,43 @@ dnf5_package_filter (const libdnf5::rpm::Package &pkg, PkBitfield filters)
 }
 
 std::vector<libdnf5::rpm::Package>
-dnf5_process_dependency (libdnf5::Base &base, const libdnf5::rpm::Package &pkg, PkRoleEnum role, gboolean recursive)
+dnf5_process_dependency(libdnf5::Base &base, const libdnf5::rpm::Package &pkg, PkRoleEnum role, gboolean recursive)
 {
 	std::vector<libdnf5::rpm::Package> results;
 	std::set<std::string> visited;
 	std::queue<libdnf5::rpm::Package> queue;
 	queue.push(pkg);
 	visited.insert(pkg.get_name() + ";" + pkg.get_evr() + ";" + pkg.get_arch());
-	
+
 	while (!queue.empty()) {
 		auto curr = queue.front();
 		queue.pop();
 		libdnf5::rpm::ReldepList reldeps(base);
-		if (role == PK_ROLE_ENUM_DEPENDS_ON) reldeps = curr.get_requires();
-		else reldeps = curr.get_provides();
-		
+		if (role == PK_ROLE_ENUM_DEPENDS_ON)
+			reldeps = curr.get_requires();
+		else
+			reldeps = curr.get_provides();
+
 		for (const auto &reldep : reldeps) {
 			std::string req = reldep.to_string();
 			libdnf5::rpm::PackageQuery query(base);
-			if (role == PK_ROLE_ENUM_DEPENDS_ON) query.filter_provides(req);
-			else query.filter_requires(req);
-			
+			if (role == PK_ROLE_ENUM_DEPENDS_ON)
+				query.filter_provides(req);
+			else
+				query.filter_requires(req);
+
 			// Filter for latest version and supported architectures to avoid duplicates
 			// for available packages
 			query.filter_latest_evr();
 			query.filter_arch(libdnf5::rpm::get_supported_arches());
-			
+
 			for (const auto &res : query) {
 				std::string res_nevra = res.get_name() + ";" + res.get_evr() + ";" + res.get_arch();
 				if (visited.find(res_nevra) == visited.end()) {
 					visited.insert(res_nevra);
 					results.push_back(res);
-					if (recursive) queue.push(res);
+					if (recursive)
+						queue.push(res);
 				}
 			}
 		}
@@ -306,57 +374,92 @@ dnf5_process_dependency (libdnf5::Base &base, const libdnf5::rpm::Package &pkg, 
 	return results;
 }
 
-void
-dnf5_emit_pkg (PkBackendJob *job, const libdnf5::rpm::Package &pkg, PkInfoEnum info, PkInfoEnum severity)
+std::string
+dnf5_build_package_id(const libdnf5::rpm::Package &pkg)
 {
-	if (info == PK_INFO_ENUM_UNKNOWN) {
-		info = PK_INFO_ENUM_AVAILABLE;
-		if (pkg.get_install_time() > 0) {
-			info = PK_INFO_ENUM_INSTALLED;
-		}
-	}
-	
-	std::string evr = pkg.get_evr();
-	std::string repo_id = pkg.get_repo_id();
+	std::string origin;
+	const char *data = nullptr;
+
 	if (pkg.get_install_time() > 0) {
-		repo_id = "installed";
-	}
-	
-	std::string package_id = pkg.get_name() + ";" + evr + ";" + pkg.get_arch() + ";" + repo_id;
-	if (severity != PK_INFO_ENUM_UNKNOWN) {
-		pk_backend_job_package_full (job, info, package_id.c_str(), pkg.get_summary().c_str(), severity);
+		// installed packages: origin is the repo they were installed from, if known
+		origin = pkg.get_from_repo_id();
+		data = "installed";
 	} else {
-		pk_backend_job_package (job, info, package_id.c_str(), pkg.get_summary().c_str());
+		origin = pkg.get_repo_id();
+		if (origin.empty() || origin == DNF5_CMDLINE_REPO_ID)
+			origin = "local";
 	}
+
+	g_autofree gchar *package_id = pk_package_id_build(
+		pkg.get_name().c_str(),
+		pkg.get_evr().c_str(),
+		pkg.get_arch().c_str(),
+		origin.c_str(),
+		data);
+	return std::string(package_id);
+}
+
+static PkInfoEnum
+dnf5_package_default_info(const libdnf5::rpm::Package &pkg, PkInfoEnum info)
+{
+	if (info != PK_INFO_ENUM_UNKNOWN)
+		return info;
+	if (pkg.get_install_time() > 0)
+		return PK_INFO_ENUM_INSTALLED;
+	return PK_INFO_ENUM_AVAILABLE;
 }
 
 void
-dnf5_sort_and_emit (PkBackendJob *job, std::vector<libdnf5::rpm::Package> &pkgs)
+dnf5_emit_pkg(PkBackendJob *job, const libdnf5::rpm::Package &pkg, PkInfoEnum info)
+{
+	std::string package_id = dnf5_build_package_id(pkg);
+	pk_backend_job_package_status(job, package_id.c_str(), info);
+}
+
+void
+dnf5_stage_pkg(GPtrArray *packages, const libdnf5::rpm::Package &pkg, PkInfoEnum info, PkInfoEnum severity)
+{
+	std::string package_id = dnf5_build_package_id(pkg);
+	pk_backend_packages_add(
+		packages,
+		dnf5_package_default_info(pkg, info),
+		package_id.c_str(),
+		pkg.get_summary().c_str(),
+		severity);
+}
+
+void
+dnf5_sort_and_emit(PkBackendJob *job, std::vector<libdnf5::rpm::Package> &pkgs)
 {
 	std::sort(pkgs.begin(), pkgs.end(), [](const libdnf5::rpm::Package &a, const libdnf5::rpm::Package &b) {
 		bool a_installed = (a.get_install_time() > 0);
 		bool b_installed = (b.get_install_time() > 0);
-		if (a_installed != b_installed) return a_installed; 
-		if (a.get_name() != b.get_name()) return a.get_name() < b.get_name();
-		if (a.get_arch() != b.get_arch()) return a.get_arch() < b.get_arch();
+		if (a_installed != b_installed)
+			return a_installed;
+		if (a.get_name() != b.get_name())
+			return a.get_name() < b.get_name();
+		if (a.get_arch() != b.get_arch())
+			return a.get_arch() < b.get_arch();
 		return a.get_evr() < b.get_evr();
 	});
 
+	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func((GDestroyNotify) g_object_unref);
 	std::set<std::string> seen_nevras;
 	for (auto &pkg : pkgs) {
 		std::string nevra = pkg.get_name() + ";" + pkg.get_evr() + ";" + pkg.get_arch();
 		if (seen_nevras.find(nevra) == seen_nevras.end()) {
-			dnf5_emit_pkg(job, pkg);
+			dnf5_stage_pkg(packages, pkg);
 			seen_nevras.insert(nevra);
 		}
 	}
+	pk_backend_job_packages(job, packages);
 }
 
 void
-dnf5_apply_filters (libdnf5::Base &base, libdnf5::rpm::PackageQuery &query, PkBitfield filters)
+dnf5_apply_filters(libdnf5::Base &base, libdnf5::rpm::PackageQuery &query, PkBitfield filters)
 {
-	gboolean installed = pk_bitfield_contain (filters, PK_FILTER_ENUM_INSTALLED);
-	gboolean available = pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_INSTALLED);
+	gboolean installed = pk_bitfield_contain(filters, PK_FILTER_ENUM_INSTALLED);
+	gboolean available = pk_bitfield_contain(filters, PK_FILTER_ENUM_NOT_INSTALLED);
 
 	if (installed && !available) {
 		query.filter_installed();
@@ -364,7 +467,7 @@ dnf5_apply_filters (libdnf5::Base &base, libdnf5::rpm::PackageQuery &query, PkBi
 		query.filter_available();
 	}
 
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_ARCH)) {
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_ARCH)) {
 		auto vars = base.get_vars();
 		if (vars.is_valid()) {
 			std::string arch = vars->get_value("arch");
@@ -376,17 +479,34 @@ dnf5_apply_filters (libdnf5::Base &base, libdnf5::rpm::PackageQuery &query, PkBi
 		}
 	}
 
-	if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NEWEST)) {
+	if (pk_bitfield_contain(filters, PK_FILTER_ENUM_NEWEST)) {
 		query.filter_latest_evr();
 	}
 }
 
 std::vector<libdnf5::rpm::Package>
-dnf5_resolve_package_ids(libdnf5::Base &base, gchar **package_ids)
+dnf5_resolve_package_ids(libdnf5::Base &base, gchar **package_ids, bool allow_cmdline_packages)
 {
 	std::vector<libdnf5::rpm::Package> pkgs;
-	if (!package_ids) return pkgs;
-	
+	if (!package_ids)
+		return pkgs;
+
+	// Packages added from local files live in the shared base's @commandline
+	// pseudo-repository, and any client may learn their package IDs from an
+	// InstallFiles simulation. Callers that act on the system must never be able
+	// to address them, or an unauthenticated InstallFiles could stage a package
+	// that a later, differently authorized transaction then installs.
+	auto is_cmdline_package = [&](const libdnf5::rpm::Package &pkg) {
+		if (allow_cmdline_packages)
+			return false;
+		if (pkg.get_repo_id() != DNF5_CMDLINE_REPO_ID)
+			return false;
+		g_warning(
+			"Refusing to resolve command line package %s for this transaction",
+			pkg.get_full_nevra().c_str());
+		return true;
+	};
+
 	for (int i = 0; package_ids[i] != NULL; i++) {
 		// Check if this is a simple package name (no semicolons) or a full package ID
 		if (strchr(package_ids[i], ';') == NULL) {
@@ -399,12 +519,15 @@ dnf5_resolve_package_ids(libdnf5::Base &base, gchar **package_ids)
 				query.filter_latest_evr();
 				query.filter_arch(libdnf5::rpm::get_supported_arches());
 
-				
 				if (!query.empty()) {
 					for (auto pkg : query) {
 						g_debug("Found package: name=%s, evr=%s, arch=%s, repo=%s",
-							pkg.get_name().c_str(), pkg.get_evr().c_str(), 
-							pkg.get_arch().c_str(), pkg.get_repo_id().c_str());
+							pkg.get_name().c_str(),
+							pkg.get_evr().c_str(),
+							pkg.get_arch().c_str(),
+							pkg.get_repo_id().c_str());
+						if (is_cmdline_package(pkg))
+							continue;
 						pkgs.push_back(pkg);
 						break; // Take the first match
 					}
@@ -416,37 +539,49 @@ dnf5_resolve_package_ids(libdnf5::Base &base, gchar **package_ids)
 			}
 			continue;
 		}
-		
+
 		// Full package ID - use existing logic
 		g_auto(GStrv) split = pk_package_id_split(package_ids[i]);
-		if (!split) continue;
-		
+		if (!split)
+			continue;
+
 		try {
 			libdnf5::rpm::PackageQuery query(base);
 			g_debug("Resolving package ID: name=%s, version=%s, arch=%s, repo=%s",
-				split[PK_PACKAGE_ID_NAME], split[PK_PACKAGE_ID_VERSION],
-				split[PK_PACKAGE_ID_ARCH], split[PK_PACKAGE_ID_DATA]);
+				split[PK_PACKAGE_ID_NAME],
+				split[PK_PACKAGE_ID_VERSION],
+				split[PK_PACKAGE_ID_ARCH],
+				split[PK_PACKAGE_ID_ORIGIN]);
 			query.filter_name(split[PK_PACKAGE_ID_NAME]);
 			query.filter_evr(split[PK_PACKAGE_ID_VERSION]);
 			query.filter_arch(split[PK_PACKAGE_ID_ARCH]);
-			
+
 			if (g_strcmp0(split[PK_PACKAGE_ID_DATA], "installed") == 0) {
 				query.filter_installed();
+			} else if (g_strcmp0(split[PK_PACKAGE_ID_ORIGIN], "local") == 0) {
+				// packages from local files are emitted with a "local" origin,
+				// but live in the command line pseudo-repository
+				query.filter_repo_id(DNF5_CMDLINE_REPO_ID);
 			} else {
-				 query.filter_repo_id(split[PK_PACKAGE_ID_DATA]);
+				query.filter_repo_id(split[PK_PACKAGE_ID_ORIGIN]);
 			}
-			
+
 			if (query.empty()) {
 				g_debug("No exact match for ID: %s. Listing similar packages...", package_ids[i]);
 				libdnf5::rpm::PackageQuery fallback(base);
 				fallback.filter_name(split[PK_PACKAGE_ID_NAME]);
 				for (const auto &p : fallback) {
 					g_debug("Found similar package: name=%s, evr=%s, arch=%s, repo=%s",
-						p.get_name().c_str(), p.get_evr().c_str(), p.get_arch().c_str(), p.get_repo_id().c_str());
+						p.get_name().c_str(),
+						p.get_evr().c_str(),
+						p.get_arch().c_str(),
+						p.get_repo_id().c_str());
 				}
 			}
 
 			for (auto pkg : query) {
+				if (is_cmdline_package(pkg))
+					continue;
 				pkgs.push_back(pkg);
 				break;
 			}
@@ -457,23 +592,22 @@ dnf5_resolve_package_ids(libdnf5::Base &base, gchar **package_ids)
 	return pkgs;
 }
 
-
 void
-dnf5_remove_old_cache_directories (PkBackend *backend, const gchar *release_ver)
+dnf5_remove_old_cache_directories(PkBackend *backend, const gchar *release_ver)
 {
-	PkBackendDnf5Private *priv = (PkBackendDnf5Private *) pk_backend_get_user_data (backend);
-	g_assert (priv->conf != NULL);
+	PkBackendDnf5Private *priv = (PkBackendDnf5Private *) pk_backend_get_user_data(backend);
+	g_assert(priv->conf != NULL);
 
 	/* cache cleanup disabled? */
-	if (g_key_file_get_boolean (priv->conf, "Daemon", "KeepCache", NULL)) {
-		g_debug ("KeepCache config option set; skipping old cache directory cleanup");
+	if (g_key_file_get_boolean(priv->conf, "Daemon", "KeepCache", NULL)) {
+		g_debug("KeepCache config option set; skipping old cache directory cleanup");
 		return;
 	}
 
 	/* only do cache cleanup for regular installs */
-	g_autofree gchar *destdir = g_key_file_get_string (priv->conf, "Daemon", "DestDir", NULL);
-	if (destdir != NULL) {
-		g_debug ("DestDir config option set; skipping old cache directory cleanup");
+	g_autofree gchar *root_dir = pk_util_get_root_dir(priv->conf);
+	if (g_strcmp0(root_dir, "/") != 0) {
+		g_debug("RootDir config option set; skipping old cache directory cleanup");
 		return;
 	}
 
@@ -489,24 +623,32 @@ dnf5_remove_old_cache_directories (PkBackend *backend, const gchar *release_ver)
 		std::string filename = entry.path().filename().string();
 
 		/* is the version older than the current release ver? */
-		if (rpmvercmp (filename.c_str(), release_ver) < 0) {
-			g_debug ("removing old cache directory %s", entry.path().c_str());
+		if (rpmvercmp(filename.c_str(), release_ver) < 0) {
+			g_debug("removing old cache directory %s", entry.path().c_str());
 			std::error_code ec;
 			std::filesystem::remove_all(entry.path(), ec);
 			if (ec)
-				g_warning ("failed to remove directory %s: %s", entry.path().c_str(), ec.message().c_str());
+				g_warning(
+					"failed to remove directory %s: %s",
+					entry.path().c_str(),
+					ec.message().c_str());
 		}
 	}
 }
 
 Dnf5DownloadCallbacks::Dnf5DownloadCallbacks(PkBackendJob *job, uint64_t total_size)
-    : job(job), total_size(total_size), finished_size(0), next_id(1) {}
+    : job(job),
+      total_size(total_size),
+      finished_size(0),
+      next_id(1)
+{
+}
 
 void *
 Dnf5DownloadCallbacks::add_new_download(void *user_data, const char *description, double total_to_download)
 {
 	std::lock_guard<std::mutex> lock(mutex);
-	void *id = reinterpret_cast<void*>(next_id++);
+	void *id = reinterpret_cast<void *>(next_id++);
 	item_progress[id] = 0;
 	return id;
 }
@@ -516,13 +658,13 @@ Dnf5DownloadCallbacks::progress(void *user_cb_data, double total_to_download, do
 {
 	std::lock_guard<std::mutex> lock(mutex);
 	item_progress[user_cb_data] = downloaded;
-	
+
 	if (total_size > 0) {
 		double current_total = finished_size;
-		for (auto const& [id, prog] : item_progress) {
+		for (auto const &[id, prog] : item_progress) {
 			current_total += prog;
 		}
-		pk_backend_job_set_percentage(job, (uint)(current_total * 100 / total_size));
+		pk_backend_job_set_percentage(job, (uint) (current_total * 100 / total_size));
 	}
 	return 0;
 }
@@ -537,7 +679,11 @@ Dnf5DownloadCallbacks::end(void *user_cb_data, TransferStatus status, const char
 }
 
 Dnf5TransactionCallbacks::Dnf5TransactionCallbacks(PkBackendJob *job)
-    : job(job), total_items(0), current_item_index(0) {}
+    : job(job),
+      total_items(0),
+      current_item_index(0)
+{
+}
 
 void
 Dnf5TransactionCallbacks::before_begin(uint64_t total)
@@ -552,11 +698,14 @@ Dnf5TransactionCallbacks::elem_progress(const libdnf5::base::TransactionPackage 
 }
 
 void
-Dnf5TransactionCallbacks::install_progress(const libdnf5::base::TransactionPackage &item, uint64_t amount, uint64_t total)
+Dnf5TransactionCallbacks::install_progress(
+	const libdnf5::base::TransactionPackage &item,
+	uint64_t amount,
+	uint64_t total)
 {
 	if (total_items > 0 && total > 0) {
-		double item_frac = (double)amount / total;
-		pk_backend_job_set_percentage(job, (uint)((current_item_index + item_frac) * 100 / total_items));
+		double item_frac = (double) amount / total;
+		pk_backend_job_set_percentage(job, (uint) ((current_item_index + item_frac) * 100 / total_items));
 	}
 }
 
@@ -565,19 +714,22 @@ Dnf5TransactionCallbacks::install_start(const libdnf5::base::TransactionPackage 
 {
 	auto action = item.get_action();
 	PkInfoEnum info = PK_INFO_ENUM_INSTALLING;
-	if (action == libdnf5::transaction::TransactionItemAction::UPGRADE ||
-	    action == libdnf5::transaction::TransactionItemAction::DOWNGRADE) {
+	if (action == libdnf5::transaction::TransactionItemAction::UPGRADE
+	    || action == libdnf5::transaction::TransactionItemAction::DOWNGRADE) {
 		info = PK_INFO_ENUM_UPDATING;
 	}
 	dnf5_emit_pkg(job, item.get_package(), info);
 }
 
 void
-Dnf5TransactionCallbacks::uninstall_progress(const libdnf5::base::TransactionPackage &item, uint64_t amount, uint64_t total)
+Dnf5TransactionCallbacks::uninstall_progress(
+	const libdnf5::base::TransactionPackage &item,
+	uint64_t amount,
+	uint64_t total)
 {
 	if (total_items > 0 && total > 0) {
-		double item_frac = (double)amount / total;
-		pk_backend_job_set_percentage(job, (uint)((current_item_index + item_frac) * 100 / total_items));
+		double item_frac = (double) amount / total;
+		pk_backend_job_set_percentage(job, (uint) ((current_item_index + item_frac) * 100 / total_items));
 	}
 }
 

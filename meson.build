@@ -1,18 +1,22 @@
 project('PackageKit', 'c',
   meson_version : '>=1.0',
-  default_options : ['warning_level=2', 'c_std=gnu17'],
+  default_options : ['warning_level=2', 'c_std=gnu23'],
 
   license : 'LGPL-2.1+',
-  version : '1.3.6',
+  version : '1.99.0',
 )
+
+source_root = meson.project_source_root()
+build_root = meson.project_build_root()
+pk_version = meson.project_version()
+pk_api_level = '19'
 
 gnome = import('gnome')
 i18n = import('i18n')
 pkg = import('pkgconfig')
+fs = import('fs')
 
-source_root = meson.project_source_root()
-
-glib_req_version = '2.76'
+glib_req_version = '2.80'
 glib_req = '>= @0@'.format(glib_req_version)
 glib_major = glib_req_version.split('.')[0].to_int()
 glib_minor = glib_req_version.split('.')[1].to_int()
@@ -54,13 +58,6 @@ if get_option('elogind')
   add_project_arguments ('-DHAVE_SYSTEMD_SD_JOURNAL_H=1', language: 'c')
 endif
 
-if get_option('local_checkout')
-  add_project_arguments ('-DPK_BUILD_LOCAL=1', language: 'c')
-endif
-
-if get_option('daemon_tests')
-  add_project_arguments ('-DPK_ENABLE_DAEMON_TESTS=1', language: 'c')
-endif
 
 # ensure we get newer POSIX stuff like realpath(3), wcwidth, etc. are available
 feature_args = [
@@ -78,10 +75,20 @@ add_project_arguments (feature_args, language: 'c')
 # allow the daemon to include library files directly
 add_project_arguments ('-DPK_COMPILATION', language: ['c', 'cpp'])
 
+pk_db_dir = join_paths(get_option('localstatedir'), 'lib', 'PackageKit')
+local_state_dir = get_option('localstatedir')
+test_data_dir = join_paths(source_root, 'tests', 'data')
+package_data_dir = get_option('datadir')
+package_locale_dir = join_paths(get_option('prefix'), get_option('datadir'), 'locale')
+pk_backends_dir = join_paths(get_option('prefix'), get_option('libdir'), 'packagekit', 'backends')
+pk_python_dir = join_paths(get_option('prefix'), get_option('libdir'), 'packagekit', 'python')
+
 conf = configuration_data()
 conf.set_quoted('DATADIR', join_paths(get_option('prefix'), get_option('datadir')))
 conf.set_quoted('LIBDIR', join_paths(get_option('prefix'), get_option('libdir')))
-conf.set_quoted('SYSCONFDIR', get_option('sysconfdir'))
+conf.set_quoted('SYSCONFDIR', join_paths(get_option('prefix'), get_option('sysconfdir')))
+conf.set_quoted('PK_BACKENDS_DIR', pk_backends_dir)
+conf.set_quoted('PK_PYTHON_DIR', pk_python_dir)
 
 conf.set_quoted('PROJECT_NAME', meson.project_name())
 conf.set_quoted('PROJECT_VERSION', meson.project_version())
@@ -106,13 +113,6 @@ config_dep = declare_dependency(
   sources: config_header,
   include_directories: include_directories('.')
 )
-
-pk_db_dir = join_paths(get_option('localstatedir'), 'lib', 'PackageKit')
-local_state_dir = get_option('localstatedir')
-test_data_dir = join_paths(source_root, 'tests', 'data')
-package_data_dir = get_option('datadir')
-package_locale_dir = join_paths(get_option('prefix'), get_option('datadir'), 'locale')
-pk_plugin_dir = join_paths(get_option('prefix'), get_option('libdir'), 'packagekit-backend')
 
 # enable strict checks and make warnings errors in maintainer mode
 if get_option('maintainer')
@@ -197,12 +197,14 @@ add_project_arguments(
 )
 
 subdir('po')
-subdir('policy')
-subdir('etc')
 subdir('data')
 subdir('lib')
 subdir('src')
 subdir('client')
+subdir('python')
 subdir('backends')
+subdir('tests')
 subdir('contrib')
-subdir('docs')
+if get_option('docs')
+    subdir('docs')
+endif

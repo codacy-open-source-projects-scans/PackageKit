@@ -5,7 +5,7 @@ nix_main_dep = dependency('nix-main', version: '>=2.9')
 nix_store_dep = dependency('nix-store', version: '>=2.9')
 nix_cmd_dep = dependency('nix-cmd', version: '>=2.9')
 
-shared_module(
+pk_backend_modules += shared_module(
   'pk_backend_nix',
   'pk-backend-nix.cc',
   'nix-lib-plus.cc',
@@ -22,5 +22,5 @@ shared_module(
     '-DG_LOG_DOMAIN="PackageKit-Nix"',
   ],
   install: true,
-  install_dir: pk_plugin_dir,
+  install_dir: pk_backends_dir,
 )

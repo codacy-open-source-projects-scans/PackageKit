@@ -34,6 +34,9 @@ static gboolean opt_allow_untrusted = FALSE;
 static gboolean opt_no_autoremove = FALSE;
 static gint opt_cache_age = -1;
 
+/* Each option is one record per line; clang-format would put every field
+ * on a line of its own and make the table unreadable. */
+/* clang-format off */
 static const GOptionEntry option_download_only[] = {
 	{ "download-only", 'd', 0, G_OPTION_ARG_NONE, &opt_download_only,
 		/* TRANSLATORS: command line argument, do we just download or apply changes */
@@ -75,6 +78,7 @@ static const GOptionEntry option_cache_age[] = {
 		N_("Maximum metadata cache age in seconds (default: 3 days)"), N_("SECONDS") },
 	{ NULL, 0, 0, 0, NULL, NULL, NULL }
 };
+/* clang-format on */
 
 /**
  * pkgc_manage_reset_options:
@@ -652,6 +656,8 @@ pkgc_upgrade (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 		}
 
 		sack = pk_results_get_package_sack (results);
+		pk_package_sack_remove_by_filter (sack, &pkgc_update_system_filter_helper, NULL);
+
 		package_ids = pk_package_sack_get_ids (sack);
 
 		if (package_ids == NULL || g_strv_length (package_ids) == 0) {
@@ -726,9 +732,9 @@ pkgc_print_offline_update_status (PkgcliContext *ctx)
 		for (guint i = 0; package_ids[i] != NULL; i++) {
 			g_autofree gchar *printable = pk_package_id_to_printable (package_ids[i]);
 			if (ctx->output_mode == PKGCLI_MODE_JSON) {
-				json_t *root = json_object ();
+				g_autoptr(json_t) root = json_object ();
 				json_object_set_new (root, "pkid", json_string (package_ids[i]));
-				pkgc_print_json_decref (root);
+				pkgc_print_json (root);
 			} else {
 				g_print ("  %s\n", printable);
 			}
@@ -769,9 +775,9 @@ pkgc_print_offline_update_status (PkgcliContext *ctx)
 		PkPackage *pkg = PK_PACKAGE (g_ptr_array_index (packages, i));
 		g_autofree gchar *printable = pk_package_id_to_printable (pk_package_get_id (pkg));
 		if (ctx->output_mode == PKGCLI_MODE_JSON) {
-			json_t *root = json_object ();
+			g_autoptr(json_t) root = json_object ();
 			json_object_set_new (root, "pkid", json_string (pk_package_get_id (pkg)));
-			pkgc_print_json_decref (root);
+			pkgc_print_json (root);
 		} else {
 			g_print ("  ");
 			g_print (_("Updated: %s"), printable);
@@ -830,10 +836,7 @@ pkgc_offline_update (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **
 						"  status  - show status information about a prepared or finished offline update");
 
 	/* parse options */
-	option_context = pkgc_option_context_for_command (
-		ctx, cmd,
-		"[REQUEST]",
-		cmd_description);
+	option_context = pkgc_option_context_for_command (ctx, cmd, "[REQUEST]", cmd_description);
 	if (!pkgc_parse_command_options (ctx, cmd, option_context, &argc, &argv, 1))
 		return PKGC_EXIT_SYNTAX_ERROR;
 
@@ -1025,25 +1028,25 @@ void
 pkgc_register_manage_commands (PkgcliContext *ctx)
 {
 	pkgc_context_register_command (
-		ctx,
-       "refresh",
-       pkgc_refresh,
-       /* TRANSLATORS: Description for refresh command in pkgcli help */
-       _("Refresh package metadata"));
+	    ctx,
+	    "refresh",
+	    pkgc_refresh,
+	    /* TRANSLATORS: Description for refresh command in pkgcli help */
+	    _("Refresh package metadata"));
 
 	pkgc_context_register_command (
-		ctx,
-		"install",
-		pkgc_install,
-		/* TRANSLATORS: Description for install command in pkgcli help */
-		_("Install packages"));
+	    ctx,
+	    "install",
+	    pkgc_install,
+	    /* TRANSLATORS: Description for install command in pkgcli help */
+	    _("Install packages"));
 
 	pkgc_context_register_command (
-		ctx,
-		"remove",
-		pkgc_remove,
-		/* TRANSLATORS: Description for remove command in pkgcli help */
-		_("Remove packages"));
+	    ctx,
+	    "remove",
+	    pkgc_remove,
+	    /* TRANSLATORS: Description for remove command in pkgcli help */
+	    _("Remove packages"));
 
 	pkgc_context_register_command (
 	    ctx,
@@ -1067,30 +1070,30 @@ pkgc_register_manage_commands (PkgcliContext *ctx)
 	    _("Download packages"));
 
 	pkgc_context_register_command (
-		ctx,
-		"offline-update",
-		pkgc_offline_update,
-		/* TRANSLATORS: Description for offline-update command in pkgcli help */
-		_("Manage offline system updates"));
+	    ctx,
+	    "offline-update",
+	    pkgc_offline_update,
+	    /* TRANSLATORS: Description for offline-update command in pkgcli help */
+	    _("Manage offline system updates"));
 
 	pkgc_context_register_command (
-		ctx,
-		"install-sig",
-		pkgc_install_sig,
-		/* TRANSLATORS: Description for install-sig command in pkgcli help */
-		_("Install package signature"));
+	    ctx,
+	    "install-sig",
+	    pkgc_install_sig,
+	    /* TRANSLATORS: Description for install-sig command in pkgcli help */
+	    _("Install package signature"));
 
 	pkgc_context_register_command (
-		ctx,
-		"repair",
-		pkgc_repair,
-		/* TRANSLATORS: Description for repair command in pkgcli help */
-		_("Repair package system"));
+	    ctx,
+	    "repair",
+	    pkgc_repair,
+	    /* TRANSLATORS: Description for repair command in pkgcli help */
+	    _("Repair package system"));
 
 	pkgc_context_register_command (
-		ctx,
-		"quit",
-		pkgc_suggest_quit,
-		/* TRANSLATORS: Description for quit command in pkgcli help */
-		_("Safely stop the PackageKit daemon"));
+	    ctx,
+	    "quit",
+	    pkgc_suggest_quit,
+	    /* TRANSLATORS: Description for quit command in pkgcli help */
+	    _("Safely stop the PackageKit daemon"));
 }

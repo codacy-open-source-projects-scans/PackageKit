@@ -2,10 +2,11 @@
  *
  * Copyright (c) 2001, 2005 Daniel Burrows (aptitude)
  * Copyright (c) 2009-2016 Daniel Nicoletti <dantti12@gmail.com>
+ * Copyright (c) 2016-2026 Matthias Klumpp <mak@debian.org>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef APT_UTILS_H
@@ -28,55 +27,53 @@
 
 #include "apt-cache-file.h"
 
-using namespace std;
-
 /**
  * Return the PkEnumGroup of the give group string.
  */
-PkGroupEnum get_enum_group(string group);
+PkGroupEnum get_enum_group(std::string group);
 
 /**
  * Return the changelog and extract details about the changes.
  */
-string fetchChangelogData(
+std::string fetchChangelogData(
     AptCacheFile &CacheFile,
     pkgAcquire &Fetcher,
     pkgCache::VerIterator Ver,
     pkgCache::VerIterator currver,
-    string *update_text,
-    string *updated,
-    string *issued);
+    std::string *update_text,
+    std::string *updated,
+    std::string *issued);
 
 /**
  * Returns a list of links pairs url;description for CVEs
  */
-GPtrArray *getCVEUrls(const string &changelog);
+GPtrArray *getCVEUrls(const std::string &changelog);
 
 /**
  * Returns a list of links pairs url;description for Debian and Ubuntu bugs
  */
-GPtrArray *getBugzillaUrls(const string &changelog);
+GPtrArray *getBugzillaUrls(const std::string &changelog);
 
 /**
  * Return if the given string ends with the other
  */
-bool ends_with(const string &str, const char *end);
+bool ends_with(const std::string &str, const char *end);
 
 /**
  * Return if the given string starts with the other
  */
-bool starts_with(const string &str, const char *end);
+bool starts_with(const std::string &str, const char *end);
 
 /**
  * Return true if the given package name is on the list of packages that require a restart
  */
-bool utilRestartRequired(const string &packageName);
+bool utilRestartRequired(const std::string &packageName);
 
 /**
  * Build a unique repository origin, in the form of
  * {distro}-{suite}-{component}
  */
-string utilBuildPackageOriginId(pkgCache::VerFileIterator vf);
+std::string utilBuildPackageOriginId(pkgCache::VerFileIterator vf);
 
 /**
  * Return an utf8 string
@@ -84,10 +81,19 @@ string utilBuildPackageOriginId(pkgCache::VerFileIterator vf);
 const char *toUtf8(const char *str);
 
 /**
+ * Wrap a possibly-null C string in a std::string, treating null as empty.
+ * Convenient for libapt-pkg accessors that may return nullptr.
+ */
+inline std::string safeStr(const char *s)
+{
+    return s ? std::string{s} : std::string{};
+}
+
+/**
  * Changelog dates are in format RFC2822/RFC5322 compatible:
  * "day-of-week, dd month yyyy hh:mm:ss +zzzz"
  * Parses and converts to ISO8601 respecting the original timezone
  */
-string changelogDateToIso8601(const string &date_str);
+std::string changelogDateToIso8601(const std::string &date_str);
 
 #endif

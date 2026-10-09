@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <alpm.h>
@@ -283,17 +282,18 @@ pk_alpm_search_is_application (alpm_pkg_t *pkg) {
 }
 
 static void
-pk_backend_search_db (PkBackendJob *job, alpm_db_t *db, MatchFunc match,
+pk_backend_search_db (PkBackendJob *job, GPtrArray *packages, alpm_db_t *db, MatchFunc match,
 		      const alpm_list_t *patterns, PkBitfield filters)
 {
 	PkBackend *backend = pk_backend_job_get_backend (job);
 	PkBackendAlpmPrivate *priv = pk_backend_get_user_data (backend);
 	const alpm_list_t *i, *j;
 
+	g_return_if_fail (packages != NULL);
 	g_return_if_fail (db != NULL);
 	g_return_if_fail (match != NULL);
 
-	/* emit packages that match all search terms */
+	/* stage packages that match all search terms */
 	for (i = alpm_db_get_pkgcache (db); i != NULL; i = i->next) {
 		if (pk_backend_job_is_cancelled (job))
 			break;
@@ -316,9 +316,9 @@ pk_backend_search_db (PkBackendJob *job, alpm_db_t *db, MatchFunc match,
 			continue;
 
 		if (db == priv->localdb) {
-			pk_alpm_pkg_emit (job, i->data, PK_INFO_ENUM_INSTALLED);
+			pk_alpm_pkg_stage (packages, i->data, PK_INFO_ENUM_INSTALLED);
 		} else if (!pk_alpm_pkg_is_local (job, i->data)) {
-			pk_alpm_pkg_emit (job, i->data, PK_INFO_ENUM_AVAILABLE);
+			pk_alpm_pkg_stage (packages, i->data, PK_INFO_ENUM_AVAILABLE);
 		}
 	}
 }
@@ -342,6 +342,7 @@ pk_backend_search_thread (PkBackendJob *job, GVariant* params, gpointer p)
 	const alpm_list_t *i;
 	alpm_list_t *patterns = NULL;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) packages = NULL;
 
 	g_return_if_fail (p == NULL);
 
@@ -395,6 +396,8 @@ pk_backend_search_thread (PkBackendJob *job, GVariant* params, gpointer p)
 					  PK_FILTER_ENUM_NOT_INSTALLED);
 	skip_remote = pk_bitfield_contain (filters, PK_FILTER_ENUM_INSTALLED);
 
+	packages = g_ptr_array_new_with_free_func (g_object_unref);
+
 	/* convert search terms to the pattern requested */
 	if (needles) {
 		for (; *needles != NULL; ++needles) {
@@ -409,7 +412,7 @@ pk_backend_search_thread (PkBackendJob *job, GVariant* params, gpointer p)
 
 	/* find installed packages first */
 	if (!skip_local)
-		pk_backend_search_db (job, priv->localdb, match_func, patterns, filters);
+		pk_backend_search_db (job, packages, priv->localdb, match_func, patterns, filters);
 
 	if (skip_remote)
 		goto out;
@@ -418,12 +421,13 @@ pk_backend_search_thread (PkBackendJob *job, GVariant* params, gpointer p)
 		if (pk_backend_job_is_cancelled (job))
 			break;
 
-		pk_backend_search_db (job, i->data, match_func, patterns, filters);
+		pk_backend_search_db (job, packages, i->data, match_func, patterns, filters);
 	}
 out:
 	if (pattern_free != NULL)
 		alpm_list_free_inner (patterns, pattern_free);
 	alpm_list_free (patterns);
+	pk_backend_job_packages (job, packages);
 	pk_alpm_finish (job, error);
 }
 

@@ -2,15 +2,15 @@
  *
  * Copyright (c) 1999 Patrick Cole <z@amused.net>
  *           (c) 2002 Synaptic development team
- *           (c) 2018-2025 Matthias Klumpp <matthias@tenstral.net>
+ *           (c) 2018-2026 Matthias Klumpp <matthias@tenstral.net>
  *
  * Author: Patrick Cole <z@amused.net>
  *         Michael Vogt <mvo@debian.org>
  *         Gustavo Niemeyer <niemeyer@conectiva.com>
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -19,9 +19,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef APT_SOURCESLIST_H
@@ -31,10 +29,10 @@
 #include <apt-pkg/tagfile.h>
 #include <apt-pkg/metaindex.h>
 
-#include <string>
 #include <list>
-
-using namespace std;
+#include <memory>
+#include <string>
+#include <vector>
 
 class SourcesList
 {
@@ -47,52 +45,36 @@ public:
     };
 
     struct SourceRecord {
-        unsigned int Type;
-        string VendorID;
-        string PrimaryURI;
+        unsigned int Type = 0;
+        std::string VendorID;
+        std::string PrimaryURI;
         std::vector<std::string> URIs;
-        string Dist;
-        string *Sections;
-        unsigned short NumSections;
-        string Comment;
+        std::string Dist;
+        std::vector<std::string> Sections;
+        std::string Comment;
 
-        string SourceFile;
-        uint Deb822StanzaIdx;
+        std::string SourceFile;
+        uint Deb822StanzaIdx = 0;
 
-        string joinedSections(const std::string &separator = " ") const;
-        string niceName();
-        string repoId();
+        std::string joinedSections(const std::string &separator = " ") const;
+        std::string niceName();
+        std::string repoId();
         bool hasSection(const char *component) const;
 
-        bool SetType(string);
-        string GetType() const;
-        bool SetURI(string);
+        bool SetType(std::string);
+        std::string GetType() const;
+        bool SetURI(std::string);
         bool SetURIs(const std::vector<std::string> &newURIs);
-
-        SourceRecord()
-            : Type(0),
-              Sections(0),
-              NumSections(0),
-              Deb822StanzaIdx(0)
-        {
-        }
-        ~SourceRecord()
-        {
-            if (Sections) {
-                delete[] Sections;
-            }
-        }
-        SourceRecord &operator=(const SourceRecord &);
     };
 
     struct VendorRecord {
-        string VendorID;
-        string FingerPrint;
-        string Description;
+        std::string VendorID;
+        std::string FingerPrint;
+        std::string Description;
     };
 
-    list<SourceRecord *> SourceRecords;
-    list<VendorRecord *> VendorRecords;
+    std::list<std::unique_ptr<SourceRecord>> SourceRecords;
+    std::list<std::unique_ptr<VendorRecord>> VendorRecords;
 
 private:
     SourceRecord *AddSourceNode(const SourceRecord &);
@@ -105,34 +87,31 @@ private:
 public:
     SourceRecord *AddSource(
         RecType Type,
-        string VendorID,
-        string URI,
-        string Dist,
-        string *Sections,
-        unsigned short count,
-        string SourceFile);
+        std::string VendorID,
+        std::string URI,
+        std::string Dist,
+        std::vector<std::string> Sections,
+        std::string SourceFile);
     SourceRecord *AddEmptySource();
-    void RemoveSource(SourceRecord *&);
-    void SwapSources(SourceRecord *&, SourceRecord *&);
-    bool ReadSourceDeb822(const string& listpath);
-    bool ReadSourceLegacy(const string& listpath);
-    bool ReadSourcePart(string listpath);
-    bool ReadSourceDir(string Dir);
+    void RemoveSource(SourceRecord *rec);
+    void SwapSources(SourceRecord *rec_one, SourceRecord *rec_two);
+    bool ReadSourceDeb822(const std::string &listpath);
+    bool ReadSourceLegacy(const std::string &listpath);
+    bool ReadSourcePart(std::string listpath);
+    bool ReadSourceDir(std::string Dir);
     bool ReadSources();
     bool UpdateSources();
 
-    VendorRecord *AddVendor(string VendorID, string FingerPrint, string Description);
-    void RemoveVendor(VendorRecord *&);
+    VendorRecord *AddVendor(std::string VendorID, std::string FingerPrint, std::string Description);
+    void RemoveVendor(VendorRecord *rec);
     bool ReadVendors();
     bool UpdateVendors();
 
-    SourcesList() {}
-    ~SourcesList();
+    SourcesList() = default;
+    ~SourcesList() = default;
 };
 
-typedef list<SourcesList::SourceRecord *>::iterator SourcesListIter;
-
-ostream &operator<<(ostream &, const SourcesList::SourceRecord &);
-ostream &operator<<(ostream &os, const SourcesList::VendorRecord &rec);
+std::ostream &operator<<(std::ostream &, const SourcesList::SourceRecord &);
+std::ostream &operator<<(std::ostream &os, const SourcesList::VendorRecord &rec);
 
 #endif

@@ -1,4 +1,4 @@
-shared_module(
+pk_backend_modules += shared_module(
   'pk_backend_portage',
   'pk-backend-portage.c',
   include_directories: packagekit_src_include,
@@ -10,7 +10,7 @@ shared_module(
     '-DG_LOG_DOMAIN="PackageKit-Portage"',
   ],
   install: true,
-  install_dir: pk_plugin_dir,
+  install_dir: pk_backends_dir,
 )
 
 install_data(

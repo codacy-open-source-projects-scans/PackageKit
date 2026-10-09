@@ -8,7 +8,7 @@ if zypp_dep.version().version_compare('>=11.4.0')
   zypp_args = ['-DZYPP_RETURN_BYTES=1']
 endif
 
-shared_module(
+pk_backend_modules += shared_module(
   'pk_backend_zypp',
   'pk-backend-zypp.cpp',
   include_directories: packagekit_src_include,
@@ -29,5 +29,5 @@ shared_module(
     '-D_FILE_OFFSET_BITS=64',
   ],
   install: true,
-  install_dir: pk_plugin_dir,
+  install_dir: pk_backends_dir,
 )

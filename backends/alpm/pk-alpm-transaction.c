@@ -6,9 +6,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "pk-backend-alpm.h"
@@ -26,6 +25,7 @@
 #include "pk-alpm-packages.h"
 #include "pk-alpm-transaction.h"
 
+#include <stdlib.h>
 #include <syslog.h>
 
 static off_t transaction_dcomplete = 0;
@@ -792,8 +792,10 @@ pk_alpm_transaction_initialize (PkBackendJob* job, alpm_transflag_t flags, const
 	return TRUE;
 }
 
+/* joins a list of strings, as returned by libalpm for
+ * ALPM_ERR_PKG_INVALID_ARCH and ALPM_ERR_PKG_INVALID */
 static gchar *
-pk_alpm_pkg_build_list (const alpm_list_t *i)
+pk_alpm_string_build_list (const alpm_list_t *i)
 {
 	GString *list;
 
@@ -803,8 +805,7 @@ pk_alpm_pkg_build_list (const alpm_list_t *i)
 	for (; i != NULL; i = i->next) {
 		if (i->data == NULL)
 			continue;
-		g_string_append_printf (list, "%s, ",
-					alpm_pkg_get_name (i->data));
+		g_string_append_printf (list, "%s, ", (const gchar *) i->data);
 	}
 
 	if (list->len > 2)
@@ -947,7 +948,11 @@ pk_alpm_transaction_simulate (PkBackendJob *job, GError **error)
 
 	switch (alpm_errno (priv->alpm)) {
 	case ALPM_ERR_PKG_INVALID_ARCH:
-		prefix = pk_alpm_pkg_build_list (data);
+		/* libalpm fills this list with malloc'd "name-version-arch"
+		 * strings (check_arch() in lib/libalpm/trans.c), not
+		 * alpm_pkg_t pointers */
+		prefix = pk_alpm_string_build_list (data);
+		alpm_list_free_inner (data, free);
 		alpm_list_free (data);
 		break;
 	case ALPM_ERR_UNSATISFIED_DEPS:
@@ -991,8 +996,11 @@ pk_alpm_transaction_packages (PkBackendJob *job)
 	PkBackendAlpmPrivate *priv = pk_backend_get_user_data (backend);
 	const alpm_list_t *i;
 	PkInfoEnum info;
+	g_autoptr(GPtrArray) packages = NULL;
 
-	/* emit packages that would have been installed */
+	packages = g_ptr_array_new_with_free_func (g_object_unref);
+
+	/* stage packages that would have been installed */
 	for (i = alpm_trans_get_add (priv->alpm); i != NULL; i = i->next) {
 		const gchar *name;
 		if (pk_backend_job_is_cancelled (job))
@@ -1006,7 +1014,7 @@ pk_alpm_transaction_packages (PkBackendJob *job)
 			info = PK_INFO_ENUM_INSTALLING;
 		}
 
-		pk_alpm_pkg_emit (job, i->data, info);
+		pk_alpm_pkg_stage (packages, i->data, info);
 	}
 
 	switch (pk_backend_job_get_role (job)) {
@@ -1019,27 +1027,14 @@ pk_alpm_transaction_packages (PkBackendJob *job)
 		break;
 	}
 
-	/* emit packages that would have been removed */
+	/* stage packages that would have been removed */
 	for (i = alpm_trans_get_remove (priv->alpm); i != NULL; i = i->next) {
 		if (pk_backend_job_is_cancelled (job))
 			break;
-		pk_alpm_pkg_emit (job, i->data, info);
+		pk_alpm_pkg_stage (packages, i->data, info);
 	}
-}
 
-static gchar *
-pk_alpm_string_build_list (const alpm_list_t *i)
-{
-	GString *list;
-
-	if (i == NULL)
-		return NULL;
-	list = g_string_new ("");
-	for (; i != NULL; i = i->next)
-		g_string_append_printf (list, "%s, ", (const gchar *) i->data);
-
-	g_string_truncate (list, list->len - 2);
-	return g_string_free (list, FALSE);
+	pk_backend_job_packages (job, packages);
 }
 
 gboolean
@@ -1071,6 +1066,7 @@ pk_alpm_transaction_commit (PkBackendJob *job, GError **error)
 		break;
 	case ALPM_ERR_PKG_INVALID:
 		prefix = pk_alpm_string_build_list (data);
+		alpm_list_free_inner (data, free);
 		alpm_list_free (data);
 		break;
 	default:
@@ -1112,7 +1108,13 @@ pk_alpm_transaction_end (PkBackendJob *job, GError **error)
 	if (tpkg != NULL)
 		pk_alpm_transaction_output_end ();
 
-	g_assert (pkalpm_current_job);
+	/* pk_alpm_transaction_initialize() may have failed, e.g. because
+	 * the pacman database is locked (ALPM_ERR_HANDLE_LOCK), and callers
+	 * still reach here to clean up.  That must not abort the daemon, and
+	 * alpm_trans_release() must always be attempted so a transaction is
+	 * never left holding the database lock. */
+	if (pkalpm_current_job == NULL)
+		syslog (LOG_DAEMON | LOG_WARNING, "transaction end without an active transaction");
 	pkalpm_current_job = NULL;
 
 	if (alpm_trans_release (priv->alpm) < 0) {

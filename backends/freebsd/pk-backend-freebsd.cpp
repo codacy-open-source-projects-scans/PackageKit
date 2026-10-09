@@ -4,9 +4,9 @@
  *
  * Licensed under the GNU General Public License Version 2
  *
- * This program is free software; you can redistribute it and/or modify
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the license, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <fcntl.h>
@@ -66,20 +65,29 @@ static void InitAdvertisedGroups()
             PK_GROUP_ENUM_COMMUNICATION, //comms
             PK_GROUP_ENUM_DESKTOP_GNOME, //gnome-* ports
             PK_GROUP_ENUM_DESKTOP_KDE, //plasma5-* ports
-            PK_GROUP_ENUM_DESKTOP_OTHER, //budgie, enlightenment, etc.
-            PK_GROUP_ENUM_DESKTOP_XFCE, //xfce-* ports
+            PK_GROUP_ENUM_DESKTOP_OTHER, //xfce, budgie, enlightenment, etc.
+            PK_GROUP_ENUM_DATABASES, //databases
             PK_GROUP_ENUM_EDUCATION, //edu
             PK_GROUP_ENUM_FONTS, //x11-fonts
             PK_GROUP_ENUM_GAMES, //games
             PK_GROUP_ENUM_GRAPHICS, //graphics
             PK_GROUP_ENUM_INTERNET, //www
             PK_GROUP_ENUM_NETWORK, //net
-            PK_GROUP_ENUM_PROGRAMMING, //devel
-            PK_GROUP_ENUM_MULTIMEDIA, //multimedia
+            PK_GROUP_ENUM_PROGRAMMING, //devel, lang
+            PK_GROUP_ENUM_EDITORS, //editors
             PK_GROUP_ENUM_SECURITY, //security
+            PK_GROUP_ENUM_LANG_HASKELL, //haskell
+            PK_GROUP_ENUM_LANG_JAVA, //java
+            PK_GROUP_ENUM_LANG_LISP, //lisp, scheme
+            PK_GROUP_ENUM_LANG_PERL, //perl5
+            PK_GROUP_ENUM_LANG_PYTHON, //python
+            PK_GROUP_ENUM_LANG_RUBY, //ruby, rubygems
+            PK_GROUP_ENUM_MULTIMEDIA, //multimedia
+            PK_GROUP_ENUM_PUBLISHING, //print
+            PK_GROUP_ENUM_SHELLS, //shells
             PK_GROUP_ENUM_SYSTEM, //sysutils
             PK_GROUP_ENUM_SCIENCE, //science
-            PK_GROUP_ENUM_MAPS, //geography
+            PK_GROUP_ENUM_GEOGRAPHY, //geography
             PK_GROUP_ENUM_VIRTUALIZATION, // emulators
             -1);
 }
@@ -200,7 +208,6 @@ static const char* unmappedPrimaryCategoriesData[] = {
     "cad",
     "chinese",
     "converters",
-    "databases",
     "distfiles",
     "dns",
     "finance",
@@ -213,14 +220,11 @@ static const char* unmappedPrimaryCategoriesData[] = {
     "irc",
     "japanese",
     "korean",
-    "lang",
-    "java",
     "net-im",
     "news",
     "polish",
     "portuguese",
     "russian",
-    "shells",
     "ports-mgmt",
     "textproc",
     "ukrainian",
@@ -294,22 +298,31 @@ static std::unordered_set<const char*> PKGroupToPortsCategories(PkGroupEnum pk_g
         case PK_GROUP_ENUM_INTERNET:
             CHECKED_INSERT("mail");
             CHECKED_INSERT_BREAK("www");
-        case PK_GROUP_ENUM_OFFICE:
-            CHECKED_INSERT("editors");
-            CHECKED_INSERT_BREAK("print");
+        case PK_GROUP_ENUM_EDITORS: CHECKED_INSERT_BREAK("editors");
+        case PK_GROUP_ENUM_SECURITY: CHECKED_INSERT_BREAK("security");
+        case PK_GROUP_ENUM_LANG_HASKELL: CHECKED_INSERT_BREAK("haskell");
+        case PK_GROUP_ENUM_LANG_JAVA: CHECKED_INSERT_BREAK("java");
+        case PK_GROUP_ENUM_LANG_LISP:
+            CHECKED_INSERT("lisp");
+            CHECKED_INSERT_BREAK("scheme");
+        case PK_GROUP_ENUM_LANG_PERL: CHECKED_INSERT_BREAK("perl5");
+        case PK_GROUP_ENUM_LANG_PYTHON: CHECKED_INSERT_BREAK("python");
+        case PK_GROUP_ENUM_LANG_RUBY:
+            CHECKED_INSERT("ruby");
+            CHECKED_INSERT_BREAK("rubygems");
+        case PK_GROUP_ENUM_PUBLISHING: CHECKED_INSERT_BREAK("print");
+        case PK_GROUP_ENUM_DATABASES: CHECKED_INSERT_BREAK("databases");
         case PK_GROUP_ENUM_OTHER: CHECKED_INSERT_BREAK("misc");
         case PK_GROUP_ENUM_PROGRAMMING:
             CHECKED_INSERT("devel");
-            CHECKED_INSERT("haskell");
-            CHECKED_INSERT("ruby");
-            CHECKED_INSERT("lisp");
-            CHECKED_INSERT_BREAK("python");
+            CHECKED_INSERT_BREAK("lang");
         case PK_GROUP_ENUM_MULTIMEDIA: CHECKED_INSERT_BREAK("multimedia");
+        case PK_GROUP_ENUM_SHELLS: CHECKED_INSERT_BREAK("shells");
         case PK_GROUP_ENUM_SYSTEM: CHECKED_INSERT_BREAK("sysutils");
         case PK_GROUP_ENUM_DESKTOP_GNOME: CHECKED_INSERT_BREAK("gnome");
         case PK_GROUP_ENUM_DESKTOP_KDE: CHECKED_INSERT_BREAK("kde");
-        case PK_GROUP_ENUM_DESKTOP_XFCE: CHECKED_INSERT_BREAK("xfce");
         case PK_GROUP_ENUM_DESKTOP_OTHER:
+            CHECKED_INSERT("xfce");
             CHECKED_INSERT("budgie");
             CHECKED_INSERT("enlightenment");
             CHECKED_INSERT_BREAK("mate");
@@ -317,14 +330,13 @@ static std::unordered_set<const char*> PKGroupToPortsCategories(PkGroupEnum pk_g
         case PK_GROUP_ENUM_VIRTUALIZATION:
             CHECKED_INSERT("linux");
             CHECKED_INSERT_BREAK("emulators");
-        case PK_GROUP_ENUM_SECURITY: CHECKED_INSERT_BREAK("security");
         case PK_GROUP_ENUM_COMMUNICATION: CHECKED_INSERT_BREAK("comms");
         case PK_GROUP_ENUM_NETWORK:
             CHECKED_INSERT("net");
             CHECKED_INSERT("net-mgmt");
             CHECKED_INSERT("net-vpn");
             CHECKED_INSERT_BREAK("net-p2p");
-        case PK_GROUP_ENUM_MAPS: CHECKED_INSERT_BREAK("geography");
+        case PK_GROUP_ENUM_GEOGRAPHY: CHECKED_INSERT_BREAK("geography");
         case PK_GROUP_ENUM_SCIENCE:
             CHECKED_INSERT("biology");
             CHECKED_INSERT("math");
@@ -362,18 +374,30 @@ static PkGroupEnum PortsCategoriesToPKGroup(gchar** categories)
         RETURN_CHECKED(PK_GROUP_ENUM_DESKTOP_GNOME);
     if (cats.count("kde"))
         RETURN_CHECKED(PK_GROUP_ENUM_DESKTOP_KDE);
-    if (cats.count("xfce"))
-        RETURN_CHECKED(PK_GROUP_ENUM_DESKTOP_XFCE);
-    if (cats.count("budgie") || cats.count("enlightenment")
-        || cats.count("mate"))
+    if (cats.count("xfce") || cats.count("budgie")
+        || cats.count("enlightenment") || cats.count("mate"))
         RETURN_CHECKED(PK_GROUP_ENUM_DESKTOP_OTHER);
     // Packages with "afterstep" category that also don't fall into advertised_groups
     if (cats.count("afterstep") && !isPrimaryCategoryMapped)
         RETURN_CHECKED(PK_GROUP_ENUM_DESKTOP_OTHER);
     // Programming language packages with "devel" are probably libraries
-    if (cats.count("devel") && (cats.count("java")
-        || cats.count("haskell") || cats.count("python")
-        || cats.count("ruby") || cats.count("lisp")))
+    if (cats.count("java"))
+        RETURN_CHECKED(PK_GROUP_ENUM_LANG_JAVA);
+    if (cats.count("haskell"))
+        RETURN_CHECKED(PK_GROUP_ENUM_LANG_HASKELL);
+    if (cats.count("python"))
+        RETURN_CHECKED(PK_GROUP_ENUM_LANG_PYTHON);
+    if (cats.count("ruby") || cats.count("rubygems"))
+        RETURN_CHECKED(PK_GROUP_ENUM_LANG_RUBY);
+    if (cats.count("lisp") || cats.count("scheme"))
+        RETURN_CHECKED(PK_GROUP_ENUM_LANG_LISP);
+    if (cats.count("perl5"))
+        RETURN_CHECKED(PK_GROUP_ENUM_LANG_PERL);
+    if (cats.count("editors"))
+        RETURN_CHECKED(PK_GROUP_ENUM_EDITORS);
+    if (cats.count("security"))
+        RETURN_CHECKED(PK_GROUP_ENUM_SECURITY);
+    if (cats.count("lang"))
         RETURN_CHECKED(PK_GROUP_ENUM_PROGRAMMING);
     // Linux packages without a primary category known to us go to generic VIRTUALIZATION
     if (cats.count("linux") && !isPrimaryCategoryMapped)
@@ -400,7 +424,11 @@ static PkGroupEnum PortsCategoriesToPKGroup(gchar** categories)
         || cats.count("net-vpn") || cats.count("net-p2p"))
         RETURN_CHECKED(PK_GROUP_ENUM_NETWORK);
     if (cats.count("geography"))
-        RETURN_CHECKED(PK_GROUP_ENUM_MAPS);
+        RETURN_CHECKED(PK_GROUP_ENUM_GEOGRAPHY);
+    if (cats.count("databases"))
+        RETURN_CHECKED(PK_GROUP_ENUM_DATABASES);
+    if (cats.count("shells"))
+        RETURN_CHECKED(PK_GROUP_ENUM_SHELLS);
     if (cats.count("biology") || cats.count("math")
         || cats.count("science"))
         RETURN_CHECKED(PK_GROUP_ENUM_SCIENCE);
@@ -477,6 +505,8 @@ pk_backend_depends_on (PkBackend *backend, PkBackendJob *job, PkBitfield filters
 
     PackageDatabase pkgDb (job, PKGDB_LOCK_READONLY, db_type);
 
+    g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
+
     guint size = g_strv_length (package_ids);
     for (guint i = 0; i < size; i++) {
         PackageView pkgView(package_ids[i]);
@@ -502,14 +532,16 @@ pk_backend_depends_on (PkBackend *backend, PkBackendJob *job, PkBitfield filters
             guint size2 = g_strv_length (dep_namevers);
             size2 -= size % 2;
             for (guint j = 0; j < size2; j+=2) {
-                gchar* dep_id = pk_package_id_build (dep_namevers[j], dep_namevers[j+1], pkgView.arch(), pkgView.repository());
-                pk_backend_job_package (job, pk_type, dep_id, ""); // TODO: we report an empty string instead of comment here
+                gchar* dep_id = pk_package_id_build (dep_namevers[j], dep_namevers[j+1], pkgView.arch(), pkgView.repository(), NULL);
+                pk_backend_packages_add (packages, pk_type, dep_id, "", PK_INFO_ENUM_UNKNOWN); // TODO: we report an empty string instead of comment here
                 g_free (dep_id);
             }
         }
         pkgdb_it_free (it);
         pkg_free (pkg);
     }
+
+    pk_backend_job_packages (job, packages);
 }
 
 void
@@ -632,15 +664,6 @@ pk_backend_get_update_detail (PkBackend *backend, PkBackendJob *job, gchar **pac
 
     gchar_ptr_vector updates;
     gchar_ptr_vector obsoletes;
-    gchar		**vendor_urls = NULL;
-    gchar		**bugzilla_urls = NULL;
-    gchar		**cve_urls = NULL;
-    PkRestartEnum	 restart = PK_RESTART_ENUM_NONE;
-    const gchar	*update_text = NULL;
-    const gchar	*changelog = NULL;
-    PkUpdateStateEnum state = PK_UPDATE_STATE_ENUM_UNKNOWN;
-    const gchar	*issued = NULL;
-    const gchar	*updated = issued;
 
 #define SAFE_SHOW(str, it) g_warning(str, it.oldPkgHandle() ? it.oldPkgView().nameversion() : "NULL", it.newPkgHandle() ? it.newPkgView().nameversion() : "NULL")
     for (auto it = jobs.begin(); it != jobs.end(); ++it) {
@@ -676,20 +699,22 @@ pk_backend_get_update_detail (PkBackend *backend, PkBackendJob *job, gchar **pac
     updates.push_back(nullptr);
     obsoletes.push_back(nullptr);
 
+    // We have no vendor/bugzilla/CVE URLs, update text, changelog or dates
+    // to report, so those properties are left at their defaults.
+    g_autoptr(GPtrArray) update_details = g_ptr_array_new_with_free_func (g_object_unref);
     for (guint i = 0; i < size; i++) {
-        pk_backend_job_update_detail (job, package_ids[i],
-                                    updates.data(),
-                                    obsoletes.data(),
-                                    vendor_urls,
-                                    bugzilla_urls,
-                                    cve_urls,
-                                    restart,
-                                    update_text,
-                                    changelog,
-                                    state,
-                                    issued,
-                                    updated);
+        PkUpdateDetail* item = pk_update_detail_new_full (package_ids[i],
+                                                          updates.data(),
+                                                          obsoletes.data(),
+                                                          nullptr, nullptr, nullptr,
+                                                          PK_RESTART_ENUM_NONE,
+                                                          nullptr, nullptr,
+                                                          PK_UPDATE_STATE_ENUM_UNKNOWN,
+                                                          nullptr, nullptr);
+        g_ptr_array_add (update_details, item);
     }
+
+    pk_backend_job_update_details (job, update_details);
 }
 
 static void
@@ -724,10 +749,12 @@ pk_backend_get_updates_thread (PkBackendJob *job, GVariant *params, gpointer use
         if (jc.cancelIfRequested())
             return;
 
-        emitter.emitPackageJob(it.newPkgHandle(), PK_INFO_ENUM_NORMAL);
+        emitter.stagePackage(it.newPkgHandle(), PK_INFO_ENUM_NORMAL);
 
         pk_backend_job_set_percentage (job, (jobNumber * 100) / jobsCount);
     }
+
+    emitter.emitPackages();
 }
 
 void
@@ -813,14 +840,14 @@ pk_backend_install_update_packages_thread (PkBackendJob *job, GVariant *params, 
             {
                 pkg* pkg = ev->e_install_finished.pkg;
                 PackageView pkgView(pkg);
-                pk_backend_job_package (job, PK_INFO_ENUM_INSTALLING, pkgView.packageKitId(), pkgView.comment());
+                pk_backend_job_package_status (job, pkgView.packageKitId(), PK_INFO_ENUM_INSTALLING);
                 break;
             }
             case PKG_EVENT_UPGRADE_FINISHED:
             {
                 pkg* pkg = ev->e_upgrade_finished.n;
                 PackageView pkgView(pkg);
-                pk_backend_job_package (job, PK_INFO_ENUM_UPDATING, pkgView.packageKitId(), pkgView.comment());
+                pk_backend_job_package_status (job, pkgView.packageKitId(), PK_INFO_ENUM_UPDATING);
                 break;
             }
             case PKG_EVENT_ALREADY_INSTALLED:
@@ -882,18 +909,20 @@ pk_backend_install_update_packages_thread (PkBackendJob *job, GVariant *params, 
     // libpkg ignores PKG_FLAG_DRY_RUN for the install/upgrade jobs
     // we have to iterate over jobs to report results to PackageKit
     if (pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE)) {
+        g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
         for (auto it = jobs.begin(); it != jobs.end(); ++it) {
             PackageView pkgView = it.newPkgView();
 
             if (it.itemType() == PKG_SOLVED_DELETE) {
                 g_warning ("%s: have to remove some packages", context);
-                pk_backend_job_package (job, PK_INFO_ENUM_REMOVING, pkgView.packageKitId(), pkgView.comment());
+                pk_backend_packages_add (packages, PK_INFO_ENUM_REMOVING, pkgView.packageKitId(), pkgView.comment(), PK_INFO_ENUM_UNKNOWN);
                 continue;
             }
 
             PkInfoEnum jobInfo = installRole ? PK_INFO_ENUM_INSTALLING : PK_INFO_ENUM_UPDATING;
-            pk_backend_job_package (job, jobInfo, pkgView.packageKitId(), pkgView.comment());
+            pk_backend_packages_add (packages, jobInfo, pkgView.packageKitId(), pkgView.comment(), PK_INFO_ENUM_UNKNOWN);
         }
+        pk_backend_job_packages (job, packages);
         return;
     }
 
@@ -1051,11 +1080,11 @@ pk_backend_resolve (PkBackend *backend, PkBackendJob *job, PkBitfield filters, g
 
     PackageDatabase pkgDb (job, PKGDB_LOCK_READONLY, dbType);
 
+    DedupPackageJobEmitter emitter(job);
     for (auto* name : names) {
         pkgdb_it* it = pkgdb_all_search (pkgDb.handle(), name, match, FIELD_NAMEVER, FIELD_NAMEVER, NULL);
         struct pkg *pkg = NULL;
 
-        DedupPackageJobEmitter emitter(job);
         while (pkgdb_it_next (it, &pkg, PKG_LOAD_BASIC | PKG_LOAD_ANNOTATIONS) == EPKG_OK) {
             // We'll be always getting installed packages from pkgdb_it_next,
             // but PackageKit sometimes asks only about available ones
@@ -1065,12 +1094,14 @@ pk_backend_resolve (PkBackend *backend, PkBackendJob *job, PkBitfield filters, g
                     && pkg_type(pkg) == PKG_INSTALLED) {
                 continue;
             }
-            emitter.emitPackageJob(pkg);
+            emitter.stagePackage(pkg);
         }
 
         pkgdb_it_free (it);
         pkg_free(pkg);
     }
+
+    emitter.emitPackages();
 }
 
 static void
@@ -1123,7 +1154,7 @@ pk_backend_remove_packages_thread (PkBackendJob *job, GVariant *params, gpointer
             {
                 pkg* pkg = ev->e_deinstall_begin.pkg;
                 PackageView pkgView(pkg);
-                pk_backend_job_package (job, PK_INFO_ENUM_REMOVING, pkgView.packageKitId(), pkgView.comment());
+                pk_backend_job_package_status (job, pkgView.packageKitId(), PK_INFO_ENUM_REMOVING);
                 pk_backend_job_set_percentage (job, 0);
                 break;
             }
@@ -1176,11 +1207,15 @@ pk_backend_remove_packages_thread (PkBackendJob *job, GVariant *params, gpointer
     // TODO: https://github.com/freebsd/pkg/issues/2137
     // libpkg ignores PKG_FLAG_DRY_RUN for the remove job
     // we have to iterate over jobs to report results to PackageKit
-    if (pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE)) {
+    // ONLY_DOWNLOAD is a no-op for remove (nothing to download), report-only
+    if (pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE) ||
+        pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD)) {
+        g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
         for (auto it = jobs.begin(); it != jobs.end(); ++it) {
             PackageView pkgView = it.newPkgView();
-            pk_backend_job_package (job, PK_INFO_ENUM_REMOVING, pkgView.packageKitId(), pkgView.comment());
+            pk_backend_packages_add (packages, PK_INFO_ENUM_REMOVING, pkgView.packageKitId(), pkgView.comment(), PK_INFO_ENUM_UNKNOWN);
         }
+        pk_backend_job_packages (job, packages);
         return;
     }
 
@@ -1514,7 +1549,7 @@ pk_freebsd_search(PkBackendJob *job, PkBitfield filters, gchar **values)
 
     DedupPackageJobEmitter emitter(job);
     while (pkgdb_it_next (it, &pkg, PKG_LOAD_BASIC | PKG_LOAD_ANNOTATIONS) == EPKG_OK) {
-        emitter.emitPackageJob(pkg);
+        emitter.stagePackage(pkg);
 
         if (pk_backend_job_is_cancelled (job))
             break;
@@ -1522,4 +1557,6 @@ pk_freebsd_search(PkBackendJob *job, PkBitfield filters, gchar **values)
 
     pkgdb_it_free (it);
     pkg_free (pkg);
+
+    emitter.emitPackages();
 }
