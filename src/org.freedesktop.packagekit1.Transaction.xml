@@ -1,16 +1,16 @@
 <!DOCTYPE node PUBLIC
 "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
 "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd" [
-  <!ENTITY ERROR_GENERAL "org.freedesktop.PackageKit.Denied">
+  <!ENTITY ERROR_GENERAL "org.freedesktop.packagekit1.Denied">
 ]>
 <node name="/">
   <!--
-    org.freedesktop.PackageKit.Transaction:
+    org.freedesktop.packagekit1.Transaction:
 
     The transaction interface is used for interacting with individual
     transactions.
   -->
-  <interface name="org.freedesktop.PackageKit.Transaction">
+  <interface name="org.freedesktop.packagekit1.Transaction">
 
     <!--*********************************************************************-->
     <!--
@@ -370,8 +370,15 @@
 
       This method typically emits `Progress`, `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `blocked`, `low`, `normal`,
-      `important` or `security`.
+      `Packages` info enumerated types should be `update`, `update-security`,
+      `update-enhancement` or `blocked` for the packages that have an update.
+      Packages that are affected by applying the updates may be included with
+      the types `install`, `remove`, `obsolete` or `downgrade`.
+
+      The urgency of an update is given by the `severity` enumerated type of
+      each package, which is one of `low`, `medium`, `high` or `critical`.
+      A blocked update carries the severity it would have if it was not
+      blocked, or `none` if the backend can not tell.
 
       The status `blocked` signifies the package cannot be updated, probably
       due to other dependencies not being met. This type allows the GUI tools
@@ -421,6 +428,8 @@
 
       `Packages` info enumerated types should be `downloading`, `updating`,
       `installing` or `removing`.
+      When simulating, they should be `install`, `update`, `remove`,
+      `reinstall`, `downgrade` or `obsolete` instead.
 
       Callers need the org.freedesktop.packagekit.localinstall-untrusted
       permission.
@@ -454,6 +463,8 @@
 
       `Packages` info enumerated types should be `downloading`, `updating`,
       `installing` or `removing`.
+      When simulating, they should be `install`, `update`, `remove`,
+      `reinstall`, `downgrade` or `obsolete` instead.
 
       Callers need the org.freedesktop.packagekit.install-untrusted
       permission.
@@ -520,7 +531,7 @@
       @transaction_flags: If the transaction should be simulated or prepared.
       @package_ids: An array of package IDs.
       @allow_deps: Either `true` or `false`. If `true` allow other packages to be removed with the package, but `false` should cause the script to abort if other packages are dependant on the package.
-      @autoremove: Either `true` or `false`. This option is only really interesting on embedded devices with a limited amount of flash storage. It suggests to the packagekit backend that dependencies installed at the same time as the package should also be removed if they are not required by anything else. For instance, if you install OpenOffice, it might download libneon as a dependency. When `auto_remove` is set to true, and you remove OpenOffice then libneon will also get removed automatically.
+      @autoremove: Either `true` or `false`. This option is only really interesting on embedded devices with a limited amount of flash storage. It suggests to the packagekit backend that dependencies installed at the same time as the package should also be removed if they are not required by anything else. For instance, if you install LibreOffice, it might download libneon as a dependency. When `auto_remove` is set to true, and you remove LibreOffice then libneon will also get removed automatically.
 
       This method removes packages from the local system.
 
@@ -529,6 +540,8 @@
 
       `Packages` info enumerated types should be `downloading`, `updating`,
       `installing` or `removing`.
+      When simulating, they should be `install`, `update`, `remove`,
+      `reinstall`, `downgrade` or `obsolete` instead.
 
       Callers need the org.freedesktop.packagekit.remove permission.
     -->
@@ -812,7 +825,10 @@
       UpgradeSystem:
       @transaction_flags: If this method is can only install trusted files, and the files are unsigned, then the backend will send a `ErrorCode(missing-gpg-signature)`.
       @distro_id: The distribution ID to upgrade to, e.g. `fedora-14`.
-      @upgrade_kind: The type of upgrade, e.g. `minimal`, `default` or `complete`. Minimal upgrades will download the smallest amount of data before launching a installer. The default is to download enough data to launch a full graphical installer, but a complete upgrade will be required if there is no internet access during install time.
+      @upgrade_kind: The type of upgrade, e.g. `minimal`, `default` or `complete`. Minimal upgrades will download the smallest amount of data
+        before launching a installer.
+        The default is to download enough data to launch a full graphical installer, but a complete upgrade will be required if there is no
+        internet access during install time.
 
       This method perfoms a distribution upgrade to the specified version.
 
@@ -870,7 +886,7 @@
       - `detail`: The multi-line package description in markdown syntax.[`s`]
       - `url`: The upstream project homepage [`s`]
       - `size`: The size of the package in bytes [`t`]
-      - `summary`: The one line package summary, e.g. Clipart for OpenOffice
+      - `summary`: The one line package summary, e.g. Clipart for LibreOffice
         [`s`]
     -->
     <signal name="Details">
@@ -942,6 +958,8 @@
       fields:
 
       - `info`: A valid `info` enumerated type [`u`]
+      - `severity`: A valid `severity` enumerated type, describing how urgent
+        a package update is. This is `none` for any package that is not an update. [`u`]
       - `package_id`: This identifier is of the form
         `name;version;arch;origin;data` in a single string and is meant to
         represent a single package unique across all local and remote data
@@ -958,11 +976,12 @@
         contents are backend-specific and it is usually empty. Frontends must
         not parse it and should rely on the `info` enumerated type for state
         information instead. [`s`]
-      - `summary`: The one line package summary, e.g. Clipart for OpenOffice
-        [`s`]
+      - `summary`: The one line package summary, e.g. Clipart for LibreOffice.
+        This may be empty when the package is emitted to show progress while
+        a transaction is modifying the system. [`s`]
     -->
     <signal name="Packages">
-      <arg type="a(uss)" name="packages" direction="out"/>
+      <arg type="a(uuss)" name="packages" direction="out"/>
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantList"/>
     </signal>
 
@@ -1150,6 +1169,9 @@
 
       This signal allows the backend to send infomation about package or
       repository progress when using Simultanous mode.
+
+      A backend signals that it is done with a package by sending the status
+      `finished` with a percentage of 100.
 
       Notes on `id`:
 

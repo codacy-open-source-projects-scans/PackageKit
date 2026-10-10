@@ -560,8 +560,8 @@ pk_client_fixup_dbus_error (GError *error)
 	/* parse the remote error */
 	name = g_dbus_error_get_remote_error (error);
 	g_dbus_error_strip_remote_error (error);
-	if (g_str_has_prefix (name, "org.freedesktop.PackageKit.Transaction."))
-		name_suffix = &name[39];
+	if (g_str_has_prefix (name, PK_DBUS_INTERFACE_TRANSACTION "."))
+		name_suffix = name + strlen (PK_DBUS_INTERFACE_TRANSACTION ".");
 	if (g_strcmp0 (name_suffix, "Denied") == 0 ||
 	    g_strcmp0 (name_suffix, "RefusedByPolicy") == 0) {
 		error->code = PK_CLIENT_ERROR_FAILED_AUTH;
@@ -872,7 +872,7 @@ pk_client_properties_changed_cb (GDBusProxy *proxy,
 static void
 pk_client_signal_package (PkClientState *state,
 			  PkInfoEnum info_enum,
-			  PkInfoEnum update_severity,
+			  PkSeverityEnum update_severity,
 			  const gchar *package_id,
 			  const gchar *summary)
 {
@@ -899,7 +899,7 @@ pk_client_signal_package (PkClientState *state,
 		      NULL);
 
 	/* add to results */
-	if (state->results != NULL && info_enum != PK_INFO_ENUM_FINISHED)
+	if (state->results != NULL)
 		pk_results_add_package (state->results, package);
 
 	/* only emit progress for verb packages */
@@ -913,8 +913,6 @@ pk_client_signal_package (PkClientState *state,
 	case PK_INFO_ENUM_REINSTALLING:
 	case PK_INFO_ENUM_DOWNGRADING:
 	case PK_INFO_ENUM_PREPARING:
-	case PK_INFO_ENUM_DECOMPRESSING:
-	case PK_INFO_ENUM_FINISHED:
 		pk_progress_set_package_id (state->progress, package_id);
 		pk_progress_set_package (state->progress, package);
 		break;
@@ -1271,18 +1269,14 @@ pk_client_signal_cb (GDBusProxy *proxy,
 	}
 	if (g_strcmp0 (signal_name, "Packages") == 0) {
 		g_autoptr(GVariantIter) iter = NULL;
-		guint flags;
-		PkInfoEnum info, severity;
+		guint info, severity;
 		const gchar *package_id, *summary;
 
-		g_variant_get (parameters, "(a(uss))", &iter);
+		g_variant_get (parameters, "(a(uuss))", &iter);
 
-		while (g_variant_iter_loop (iter, "(u&s&s)", &flags, &package_id, &summary)) {
-			/* The 'info' and 'update-severity' are encoded in the single value */
-			info = flags & 0xFFFF;
-			severity = (flags >> 16) & 0xFFFF;
+		while (
+		    g_variant_iter_loop (iter, "(uu&s&s)", &info, &severity, &package_id, &summary))
 			pk_client_signal_package (state, info, severity, package_id, summary);
-		}
 
 		return;
 	}
@@ -2216,7 +2210,7 @@ pk_client_create_helper_socket (PkClientState *state)
 	state->client_helper = pk_client_helper_new ();
 
 	/* create socket to read from /tmp */
-	socket_id = g_strdup_printf ("gpk-%s.socket", &state->tid[1]);
+	socket_id = g_strdup_printf ("gpk-%s.socket", strrchr (state->tid, '/') + 1);
 	socket_filename = g_build_filename (g_get_tmp_dir (), socket_id, NULL);
 
 	/* start the helper process */

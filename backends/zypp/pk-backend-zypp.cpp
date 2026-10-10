@@ -335,7 +335,7 @@ struct RemoveResolvableReportReceiver : public zypp::callback::ReceiveReport<zyp
 
 	virtual void finish (zypp::Resolvable::constPtr resolvable, Error error, const std::string &reason) {
 		if (_package_id != NULL) {
-			pk_backend_job_package_status (_job, _package_id, PK_INFO_ENUM_FINISHED);
+			pk_backend_job_set_item_progress (_job, _package_id, PK_STATUS_ENUM_FINISHED, 100);
 			clear_package_id ();
 		}
 	}
@@ -1265,7 +1265,7 @@ static void
 zypp_backend_stage_package (GPtrArray *packages, PkInfoEnum info,
 			    const sat::Solvable &pkg,
 			    const char *opt_summary,
-			    PkInfoEnum update_severity = PK_INFO_ENUM_UNKNOWN)
+			    PkSeverityEnum update_severity = PK_SEVERITY_ENUM_NONE)
 {
 	gchar *id = zypp_build_package_id_from_resolvable (pkg);
 
@@ -1451,8 +1451,8 @@ zypp_get_updates (PkBackendJob *job, ZYpp::Ptr zypp, set<PoolItem> &candidates)
 		}
 
 		bool hidePackages = false;
-		if (PathInfo("/etc/PackageKit/ZYpp.conf").isExist()) {
-			parser::IniDict vendorConf(InputStream("/etc/PackageKit/ZYpp.conf"));
+		if (PathInfo("/etc/packagekit/ZYpp.conf").isExist()) {
+			parser::IniDict vendorConf(InputStream("/etc/packagekit/ZYpp.conf"));
 			if (vendorConf.hasSection("Updates")) {
 				for ( parser::IniDict::entry_const_iterator eit = vendorConf.entriesBegin("Updates");
 				      eit != vendorConf.entriesEnd("Updates");
@@ -1539,14 +1539,14 @@ zypp_backend_pool_item_notify (PkBackendJob  *job,
 
 	if (item.status ().isToBeUninstalledDueToUpgrade ()) {
 		MIL << "updating " << item << endl;
-		status = PK_INFO_ENUM_UPDATING;
+		status = PK_INFO_ENUM_UPDATE;
 	} else if (item.status ().isToBeUninstalledDueToObsolete ()) {
-		status = PK_INFO_ENUM_OBSOLETING;
+		status = PK_INFO_ENUM_OBSOLETE;
 	} else if (item.status ().isToBeInstalled ()) {
 		MIL << "installing " << item << endl;
-		status = PK_INFO_ENUM_INSTALLING;
+		status = PK_INFO_ENUM_INSTALL;
 	} else if (item.status ().isToBeUninstalled ()) {
-		status = PK_INFO_ENUM_REMOVING;
+		status = PK_INFO_ENUM_REMOVE;
 
 		const string &name = item.satSolvable().name();
 		if (name == "glibc" || name == "PackageKit" ||
@@ -1951,16 +1951,16 @@ pk_backend_supports_parallelization (PkBackend *backend)
 const gchar *
 pk_backend_get_description (PkBackend *backend)
 {
-	return g_strdup ("ZYpp package manager");
+	return "ZYpp package manager";
 }
 
 const gchar *
 pk_backend_get_author (PkBackend *backend)
 {
-	return g_strdup ("Boyd Timothy <btimothy@gmail.com>, "
+	return "Boyd Timothy <btimothy@gmail.com>, "
 			 "Scott Reeves <sreeves@novell.com>, "
 			 "Stefan Haas <shaas@suse.de>, "
-			 "ZYpp developers <zypp-devel@opensuse.org>");
+			 "ZYpp developers <zypp-devel@opensuse.org>";
 }
 
 void
@@ -2064,27 +2064,20 @@ backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 		}
 
 		// look for packages which would be uninstalled
-		bool error = false;
 		for (ResPool::byKind_iterator it = pool.byKindBegin (ResKind::package);
 				it != pool.byKindEnd (ResKind::package); ++it) {
 
-			if (!error && !zypp_filter_solvable (_filters, it->resolvable()->satSolvable()))
-				error = !zypp_backend_pool_item_notify (job, packages, *it);
+			if (it->status ().isToBeUninstalled () &&
+			    !zypp_filter_solvable (_filters, it->resolvable()->satSolvable()))
+				zypp_backend_stage_package (packages, PK_INFO_ENUM_INSTALLED,
+							    it->resolvable()->satSolvable(),
+							    it->resolvable ()->summary ().c_str ());
 		}
 
 		solver.setForceResolve (false);
 	}
 
 	pk_backend_job_packages (job, packages);
-}
-
-/**
-  * pk_backend_required_by:
-  */
-void
-pk_backend_required_by(PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids, gboolean recursive)
-{
-	pk_backend_job_thread_create (job, backend_required_by_thread, NULL, NULL);
 }
 
 /**
@@ -2285,12 +2278,6 @@ backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 	}
 }
 
-void
-pk_backend_depends_on (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids, gboolean recursive)
-{
-	pk_backend_job_thread_create (job, backend_depends_on_thread, NULL, NULL);
-}
-
 static void
 backend_get_details_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -2368,12 +2355,6 @@ backend_get_details_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 	}
 }
 
-void
-pk_backend_get_details (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
-{
-	pk_backend_job_thread_create (job, backend_get_details_thread, NULL, NULL);
-}
-
 static void
 backend_get_details_local_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -2423,12 +2404,6 @@ backend_get_details_local_thread (PkBackendJob *job, GVariant *params, gpointer 
 
 		g_free (package_id);
 	}
-}
-
-void
-pk_backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **full_paths)
-{
-	pk_backend_job_thread_create (job, backend_get_details_local_thread, NULL, NULL);
 }
 
 /**
@@ -2487,15 +2462,6 @@ backend_get_files_local_thread (PkBackendJob *job, GVariant *params, gpointer us
 	}
 }
 
-/**
- * pk_backend_get_files_local:
- */
-void
-pk_backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **full_paths)
-{
-	pk_backend_job_thread_create (job, backend_get_files_local_thread, NULL, NULL);
-}
-
 static void
 backend_get_distro_upgrades_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -2540,12 +2506,6 @@ backend_get_distro_upgrades_thread(PkBackendJob *job, GVariant *params, gpointer
 	}
 }
 
-void
-pk_backend_get_distro_upgrades (PkBackend *backend, PkBackendJob *job)
-{
-	pk_backend_job_thread_create (job, backend_get_distro_upgrades_thread, NULL, NULL);
-}
-
 static void
 backend_refresh_cache_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -2562,12 +2522,6 @@ backend_refresh_cache_thread (PkBackendJob *job, GVariant *params, gpointer user
 	}
 
 	zypp_refresh_cache (job, zypp, force);
-}
-
-void
-pk_backend_refresh_cache (PkBackend *backend, PkBackendJob *job, gboolean force)
-{
-	pk_backend_job_thread_create (job, backend_refresh_cache_thread, NULL, NULL);
 }
 
 /* If a critical self update (see qualifying steps below) is available then only show/install that update first.
@@ -2635,21 +2589,18 @@ backend_get_updates_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 		ResObject::constPtr res = ci->resolvable();
 
 		// Emit the package
-		PkInfoEnum infoEnum = PK_INFO_ENUM_ENHANCEMENT;
+		PkInfoEnum infoEnum = PK_INFO_ENUM_UPDATE;
+		PkSeverityEnum severity = PK_SEVERITY_ENUM_NONE;
 		if (detail == SelfUpdate::kYesAndShaddowsSecurity) {
-			infoEnum = PK_INFO_ENUM_SECURITY;	// bsc#951592: raise priority if security patch is shadowed
+			infoEnum = PK_INFO_ENUM_UPDATE_SECURITY;	// bsc#951592: raise priority if security patch is shadowed
 		} else if (isKind<Patch>(res)) {
 			Patch::constPtr patch = asKind<Patch>(res);
-			if (patch->category () == "recommended") {
-				infoEnum = PK_INFO_ENUM_BUGFIX;
-			} else if (patch->category () == "optional") {
-				infoEnum = PK_INFO_ENUM_LOW;
+			if (patch->category () == "optional") {
+				severity = PK_SEVERITY_ENUM_LOW;
 			} else if (patch->category () == "security") {
-				infoEnum = PK_INFO_ENUM_SECURITY;
+				infoEnum = PK_INFO_ENUM_UPDATE_SECURITY;
 			} else if (patch->category () == "distupgrade") {
 				continue;
-			} else {
-				infoEnum = PK_INFO_ENUM_NORMAL;
 			}
 		}
 
@@ -2659,18 +2610,12 @@ backend_get_updates_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 			// res->summary ().c_str ());
 			// Test if this still happens!
 			zypp_backend_stage_package (packages, infoEnum, res->satSolvable (),
-						    res->summary ().c_str (), infoEnum);
+						    res->summary ().c_str (), severity);
 		}
 	}
 
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_set_percentage (job, 100);
-}
-
-void
-pk_backend_get_updates (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
-{
-	pk_backend_job_thread_create (job, backend_get_updates_thread, NULL, NULL);
 }
 
 static void
@@ -2771,15 +2716,6 @@ backend_install_files_thread (PkBackendJob *job, GVariant *params, gpointer user
 	}
 }
 
-/**
-  * pk_backend_install_files
-  */
-void
-pk_backend_install_files (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **full_paths)
-{
-	pk_backend_job_thread_create (job, backend_install_files_thread, NULL, NULL);
-}
-
 static void
 backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -2874,15 +2810,6 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 	}
 
 	pk_backend_job_update_details (job, update_details);
-}
-
-/**
-  * pk_backend_get_update_detail
-  */
-void
-pk_backend_get_update_detail (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
-{
-	pk_backend_job_thread_create (job, backend_get_update_detail_thread, NULL, NULL);
 }
 
 static void
@@ -3028,36 +2955,19 @@ backend_install_packages_thread (PkBackendJob *job, GVariant *params, gpointer u
 	}
 }
 
-/**
- * pk_backend_install_packages:
- */
-void
-pk_backend_install_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **package_ids)
-{
-	// For now, don't let the user cancel the install once it's started
-	pk_backend_job_set_allow_cancel (job, FALSE);
-	pk_backend_job_thread_create (job, backend_install_packages_thread, NULL, NULL);
-}
-
-
 static void
 backend_install_signature_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
 	const gchar *key_id;
 	const gchar *package_id;
 
-	g_variant_get(params, "(&s&s)",
+	g_variant_get(params, "(u&s&s)",
+		NULL,
 		&key_id,
 		&package_id);
 
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_SIG_CHECK);
 	priv->signatures.push_back ((string)(key_id));
-}
-
-void
-pk_backend_install_signature (PkBackend *backend, PkBackendJob *job, PkSigTypeEnum type, const gchar *key_id, const gchar *package_id)
-{
-	pk_backend_job_thread_create (job, backend_install_signature_thread, NULL, NULL);
 }
 
 static void
@@ -3146,13 +3056,6 @@ backend_remove_packages_thread (PkBackendJob *job, GVariant *params, gpointer us
 			job, PK_ERROR_ENUM_INTERNAL_ERROR, "%s", ex.asUserString().c_str());
 		return;
 	}
-}
-
-void
-pk_backend_remove_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags,
-			    gchar **package_ids, gboolean allow_deps, gboolean autoremove)
-{
-	pk_backend_job_thread_create (job, backend_remove_packages_thread, NULL, NULL);
 }
 
 static void
@@ -3252,12 +3155,6 @@ backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 	pk_backend_job_packages (job, packages);
 }
 
-void
-pk_backend_resolve (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids)
-{
-	pk_backend_job_thread_create (job, backend_resolve_thread, NULL, NULL);
-}
-
 static void
 backend_find_packages_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -3338,18 +3235,6 @@ backend_find_packages_thread (PkBackendJob *job, GVariant *params, gpointer user
 	zypp_emit_filtered_packages_in_list (job, _filters, v);
 }
 
-void
-pk_backend_search_names (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
-{
-	pk_backend_job_thread_create (job, backend_find_packages_thread, NULL, NULL);
-}
-
-void
-pk_backend_search_details (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
-{
-	pk_backend_job_thread_create (job, backend_find_packages_thread, NULL, NULL);
-}
-
 static void
 backend_search_group_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -3402,20 +3287,8 @@ backend_search_group_thread (PkBackendJob *job, GVariant *params, gpointer user_
 	pk_backend_job_set_percentage (job, 100);
 }
 
-void
-pk_backend_search_groups (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
-{
-	pk_backend_job_thread_create (job, backend_search_group_thread, NULL, NULL);
-}
-
-void
-pk_backend_search_files (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
-{
-	pk_backend_job_thread_create (job, backend_find_packages_thread, NULL, NULL);
-}
-
-void
-pk_backend_get_repo_list (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
+static void
+backend_get_repo_list (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
 	MIL << endl;
 
@@ -3459,8 +3332,8 @@ pk_backend_get_repo_list (PkBackend *backend, PkBackendJob *job, PkBitfield filt
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_repo_enable (PkBackend *backend, PkBackendJob *job, const gchar *rid, gboolean enabled)
+static void
+backend_repo_enable (PkBackend *backend, PkBackendJob *job, const gchar *rid, gboolean enabled)
 {
 	MIL << endl;
 
@@ -3562,15 +3435,6 @@ backend_get_files_thread (PkBackendJob *job, GVariant *params, gpointer user_dat
 	}
 }
 
-/**
-  * pk_backend_get_files:
-  */
-void
-pk_backend_get_files(PkBackend *backend, PkBackendJob *job, gchar **package_ids)
-{
-	pk_backend_job_thread_create (job, backend_get_files_thread, NULL, NULL);
-}
-
 static void
 backend_get_packages_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
@@ -3598,14 +3462,6 @@ backend_get_packages_thread (PkBackendJob *job, GVariant *params, gpointer user_
 
 	zypp_emit_filtered_packages_in_list (job, _filters, v);
 
-}
-/**
-  * pk_backend_get_packages:
-  */
-void
-pk_backend_get_packages (PkBackend *backend, PkBackendJob *job, PkBitfield filter)
-{
-	pk_backend_job_thread_create (job, backend_get_packages_thread, NULL, NULL);
 }
 
 static void
@@ -3699,15 +3555,6 @@ backend_update_packages_thread (PkBackendJob *job, GVariant *params, gpointer us
 	zypp_perform_execution (job, zypp, UPDATE, FALSE, transaction_flags);
 }
 
-/**
-  * pk_backend_update_packages
-  */
-void
-pk_backend_update_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags, gchar **package_ids)
-{
-	pk_backend_job_thread_create (job, backend_update_packages_thread, NULL, NULL);
-}
-
 static void
 pk_backend_upgrade_system_thread (PkBackendJob *job,
 				  GVariant *params,
@@ -3753,19 +3600,6 @@ pk_backend_upgrade_system_thread (PkBackendJob *job,
 	upgrade_system (job, zypp, transaction_flags);
 
 	g_unsetenv ("ZYPP_REPO_RELEASEVER");
-}
-
-/**
-  * pk_backend_upgrade_system
-  */
-void
-pk_backend_upgrade_system (PkBackend *backend,
-			   PkBackendJob *job,
-			   PkBitfield transaction_flags,
-			   const gchar *distro_id,
-			   PkUpgradeKindEnum upgrade_kind)
-{
-	pk_backend_job_thread_create (job, pk_backend_upgrade_system_thread, NULL, NULL);
 }
 
 static void
@@ -3886,15 +3720,6 @@ backend_repo_set_data_thread (PkBackendJob *job, GVariant *params, gpointer user
 	} catch (const Exception &ex) {
 		pk_backend_job_error_code (job, PK_ERROR_ENUM_INTERNAL_ERROR, "%s", ex.asString ().c_str ());
 	}
-}
-
-/**
-  * pk_backend_repo_set_data
-  */
-void
-pk_backend_repo_set_data (PkBackend *backend, PkBackendJob *job, const gchar *repo_id, const gchar *parameter, const gchar *value)
-{
-	pk_backend_job_thread_create (job, backend_repo_set_data_thread, NULL, NULL);
 }
 
 /**
@@ -4025,15 +3850,6 @@ backend_what_provides_thread (PkBackendJob *job, GVariant *params, gpointer user
 	pk_backend_job_packages (job, packages);
 }
 
-/**
-  * pk_backend_what_provides
-  */
-void
-pk_backend_what_provides (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
-{
-	pk_backend_job_thread_create (job, backend_what_provides_thread, NULL, NULL);
-}
-
 gchar **
 pk_backend_get_mime_types (PkBackend *backend)
 {
@@ -4119,15 +3935,6 @@ backend_download_packages_thread (PkBackendJob *job, GVariant *params, gpointer 
 			job, PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED, "%s", ex.asUserString().c_str());
 		return;
 	}
-}
-
-/**
- * pk_backend_download_packages:
- */
-void
-pk_backend_download_packages (PkBackend *backend, PkBackendJob *job, gchar **package_ids, const gchar *directory)
-{
-	pk_backend_job_thread_create (job, backend_download_packages_thread, NULL, NULL);
 }
 
 void
@@ -4304,4 +4111,146 @@ ZyppBackend::ZyppBackendReceiver::zypp_signature_required (const string &file)
 		ok = true;
 
 	return ok;
+}
+
+PkBitfield
+pk_backend_get_roles (PkBackend *backend)
+{
+	return pk_bitfield_from_enums (
+		PK_ROLE_ENUM_REQUIRED_BY,
+		PK_ROLE_ENUM_DEPENDS_ON,
+		PK_ROLE_ENUM_GET_DETAILS,
+		PK_ROLE_ENUM_GET_DETAILS_LOCAL,
+		PK_ROLE_ENUM_GET_FILES_LOCAL,
+		PK_ROLE_ENUM_GET_DISTRO_UPGRADES,
+		PK_ROLE_ENUM_REFRESH_CACHE,
+		PK_ROLE_ENUM_GET_UPDATES,
+		PK_ROLE_ENUM_INSTALL_FILES,
+		PK_ROLE_ENUM_GET_UPDATE_DETAIL,
+		PK_ROLE_ENUM_INSTALL_PACKAGES,
+		PK_ROLE_ENUM_INSTALL_SIGNATURE,
+		PK_ROLE_ENUM_REMOVE_PACKAGES,
+		PK_ROLE_ENUM_RESOLVE,
+		PK_ROLE_ENUM_SEARCH_NAME,
+		PK_ROLE_ENUM_SEARCH_DETAILS,
+		PK_ROLE_ENUM_SEARCH_GROUP,
+		PK_ROLE_ENUM_SEARCH_FILE,
+		PK_ROLE_ENUM_GET_REPO_LIST,
+		PK_ROLE_ENUM_REPO_ENABLE,
+		PK_ROLE_ENUM_GET_FILES,
+		PK_ROLE_ENUM_GET_PACKAGES,
+		PK_ROLE_ENUM_UPDATE_PACKAGES,
+		PK_ROLE_ENUM_UPGRADE_SYSTEM,
+		PK_ROLE_ENUM_REPO_SET_DATA,
+		PK_ROLE_ENUM_WHAT_PROVIDES,
+		PK_ROLE_ENUM_DOWNLOAD_PACKAGES,
+		-1);
+}
+
+/* the daemon has already set the role and packed the parameters into the job */
+void
+pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
+{
+	PkRoleEnum role = pk_backend_job_get_role (job);
+	GVariant *params = pk_backend_job_get_parameters (job);
+
+	switch (role) {
+	case PK_ROLE_ENUM_REQUIRED_BY:
+		pk_backend_job_thread_create (job, backend_required_by_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_DEPENDS_ON:
+		pk_backend_job_thread_create (job, backend_depends_on_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_DETAILS:
+		pk_backend_job_thread_create (job, backend_get_details_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_DETAILS_LOCAL:
+		pk_backend_job_thread_create (job, backend_get_details_local_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_FILES_LOCAL:
+		pk_backend_job_thread_create (job, backend_get_files_local_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_DISTRO_UPGRADES:
+		pk_backend_job_thread_create (job, backend_get_distro_upgrades_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_REFRESH_CACHE:
+		pk_backend_job_thread_create (job, backend_refresh_cache_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_UPDATES:
+		pk_backend_job_thread_create (job, backend_get_updates_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_INSTALL_FILES:
+		pk_backend_job_thread_create (job, backend_install_files_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
+		pk_backend_job_thread_create (job, backend_get_update_detail_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_INSTALL_PACKAGES:
+		// For now, don't let the user cancel the install once it's started
+		pk_backend_job_set_allow_cancel (job, FALSE);
+		pk_backend_job_thread_create (job, backend_install_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_INSTALL_SIGNATURE:
+		pk_backend_job_thread_create (job, backend_install_signature_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_REMOVE_PACKAGES:
+		pk_backend_job_thread_create (job, backend_remove_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_RESOLVE:
+		pk_backend_job_thread_create (job, backend_resolve_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_SEARCH_NAME:
+		pk_backend_job_thread_create (job, backend_find_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_SEARCH_DETAILS:
+		pk_backend_job_thread_create (job, backend_find_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_SEARCH_GROUP:
+		pk_backend_job_thread_create (job, backend_search_group_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_SEARCH_FILE:
+		pk_backend_job_thread_create (job, backend_find_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_REPO_LIST: {
+		PkBitfield filters;
+
+		g_variant_get (params, "(t)", &filters);
+		backend_get_repo_list (backend, job, filters);
+		break;
+	}
+	case PK_ROLE_ENUM_REPO_ENABLE: {
+		const gchar *rid;
+		gboolean enabled;
+
+		g_variant_get (params, "(&sb)", &rid, &enabled);
+		backend_repo_enable (backend, job, rid, enabled);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_FILES:
+		pk_backend_job_thread_create (job, backend_get_files_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_GET_PACKAGES:
+		pk_backend_job_thread_create (job, backend_get_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_UPDATE_PACKAGES:
+		pk_backend_job_thread_create (job, backend_update_packages_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_UPGRADE_SYSTEM:
+		pk_backend_job_thread_create (job, pk_backend_upgrade_system_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_REPO_SET_DATA:
+		pk_backend_job_thread_create (job, backend_repo_set_data_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_WHAT_PROVIDES:
+		pk_backend_job_thread_create (job, backend_what_provides_thread, NULL, NULL);
+		break;
+	case PK_ROLE_ENUM_DOWNLOAD_PACKAGES:
+		pk_backend_job_thread_create (job, backend_download_packages_thread, NULL, NULL);
+		break;
+	default:
+		pk_backend_job_error_code (job, PK_ERROR_ENUM_NOT_SUPPORTED,
+					   "role %s is not supported", pk_role_enum_to_string (role));
+		pk_backend_job_finished (job);
+		break;
+	}
 }

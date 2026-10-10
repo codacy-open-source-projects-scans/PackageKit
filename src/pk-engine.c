@@ -918,7 +918,7 @@ pk_engine_network_state_changed_cb (GNetworkMonitor *network_monitor,
 static void
 pk_engine_setup_file_monitors (PkEngine *engine)
 {
-	const gchar *filename = SYSCONFDIR "/PackageKit/PackageKit.conf";
+	const gchar *filename = SYSCONFDIR "/packagekit/PackageKit.conf";
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GFile) file_binary = NULL;
 	g_autoptr(GFile) file_conf = NULL;
@@ -1936,7 +1936,7 @@ pk_engine_on_bus_acquired_cb (GDBusConnection *connection, const gchar *name, gp
 			  pk_engine_proxy_logind_cb,
 			  engine);
 
-	/* register org.freedesktop.PackageKit */
+	/* register org.freedesktop.packagekit1 */
 	registration_id = g_dbus_connection_register_object (connection,
 							     PK_DBUS_PATH,
 							     engine->introspection->interfaces[0],

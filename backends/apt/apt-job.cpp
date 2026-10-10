@@ -413,7 +413,7 @@ void AptJob::stagePackageForEmit(
     GPtrArray *array,
     const pkgCache::VerIterator &ver,
     PkInfoEnum state,
-    PkInfoEnum updateSeverity) const
+    PkSeverityEnum updateSeverity) const
 {
     g_autofree gchar *package_id = m_cache->buildPackageId(ver);
 
@@ -475,9 +475,10 @@ void AptJob::emitRequireRestart(PkgList &output)
     }
 }
 
-void AptJob::emitUpdates(PkgList &output, PkBitfield filters)
+void AptJob::emitUpdates(PkgList &output, PkBitfield filters, bool blocked)
 {
     PkInfoEnum state;
+    PkSeverityEnum severity;
     // Sort so we can remove the duplicated entries
     output.sort();
 
@@ -495,7 +496,8 @@ void AptJob::emitUpdates(PkgList &output, PkBitfield filters)
             break;
 
         // the default update info
-        state = PK_INFO_ENUM_NORMAL;
+        state = PK_INFO_ENUM_UPDATE;
+        severity = PK_SEVERITY_ENUM_NONE;
 
         // let find what kind of upgrade this is
         pkgCache::VerFileIterator vf = pkgInfo.ver.FileList();
@@ -504,19 +506,23 @@ void AptJob::emitUpdates(PkgList &output, PkBitfield filters)
         std::string label = safeStr(vf.File().Label());
 
         if (origin == "Backports.org archive" || ends_with(origin, "-backports")) {
-            state = PK_INFO_ENUM_ENHANCEMENT;
+            state = PK_INFO_ENUM_UPDATE_ENHANCEMENT;
         } else if (ends_with(archive, "-security") || label == "Debian-Security") {
-            state = PK_INFO_ENUM_SECURITY;
+            state = PK_INFO_ENUM_UPDATE_SECURITY;
         } else if (ends_with(archive, "-backports")) {
-            state = PK_INFO_ENUM_ENHANCEMENT;
+            state = PK_INFO_ENUM_UPDATE_ENHANCEMENT;
         } else if (ends_with(archive, "-proposed-updates") || ends_with(archive, "-updates-proposed")) {
-            state = PK_INFO_ENUM_LOW;
-        } else if (ends_with(archive, "-updates")) {
-            state = PK_INFO_ENUM_BUGFIX;
+            severity = PK_SEVERITY_ENUM_LOW;
         }
 
-        // NOTE: Frontends expect us to pass the update urgency as both its state *and* actual urgency value here.
-        stagePackageForEmit(pkgArray, pkgInfo.ver, state, state);
+        // a blocked update keeps the severity it would have had as an update
+        if (blocked) {
+            if (severity == PK_SEVERITY_ENUM_NONE)
+                severity = pk_backend_default_update_severity(state);
+            state = PK_INFO_ENUM_BLOCKED;
+        }
+
+        stagePackageForEmit(pkgArray, pkgInfo.ver, state, severity);
     }
 
     // emit
@@ -1671,11 +1677,11 @@ PkgList AptJob::checkChangedPackages(bool emitChanged)
 
     if (emitChanged) {
         // emit packages that have changes
-        emitPackages(obsoleting, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_OBSOLETING);
-        emitPackages(removing, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_REMOVING);
-        emitPackages(downgrading, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_DOWNGRADING);
-        emitPackages(installing, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_INSTALLING);
-        emitPackages(updating, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_UPDATING);
+        emitPackages(obsoleting, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_OBSOLETE);
+        emitPackages(removing, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_REMOVE);
+        emitPackages(downgrading, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_DOWNGRADE);
+        emitPackages(installing, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_INSTALL);
+        emitPackages(updating, PK_FILTER_ENUM_NONE, PK_INFO_ENUM_UPDATE);
     }
 
     return ret;
@@ -1725,7 +1731,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
     if (!m_lastPackage.empty() && m_lastPackage.compare(pkg) != 0) {
         const pkgCache::VerIterator &ver = findTransactionPackage(m_lastPackage);
         if (!ver.end()) {
-            emitPackage(ver, PK_INFO_ENUM_FINISHED);
+            emitPackageProgress(ver, PK_STATUS_ENUM_FINISHED, 100);
         }
         m_lastSubProgress = 0;
     }
@@ -1777,7 +1783,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
 
         g_auto(GStrv) envp = nullptr;
         g_auto(GStrv) argv = (gchar **)g_malloc(5 * sizeof(gchar *));
-        argv[0] = g_build_filename(DATADIR, "PackageKit", "helpers", "apt", "pkconffile", nullptr);
+        argv[0] = g_build_filename(DATADIR, "packagekit", "helpers", "apt", "pkconffile", nullptr);
         argv[1] = g_strdup(m_lastPackage.c_str());
         argv[2] = g_strdup(orig_file.c_str());
         argv[3] = g_strdup(new_file.c_str());
@@ -1890,7 +1896,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
         } else if (starts_with(str, "Unpacking")) {
             const pkgCache::VerIterator &ver = findTransactionPackage(pkg);
             if (!ver.end()) {
-                emitPackage(ver, PK_INFO_ENUM_DECOMPRESSING);
+                emitPackage(ver, PK_INFO_ENUM_INSTALLING);
                 emitPackageProgress(ver, PK_STATUS_ENUM_INSTALL, 50);
             }
         } else if (starts_with(str, "Configuring")) {
@@ -1898,7 +1904,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
             if (m_lastSubProgress >= 100 && !m_lastPackage.empty()) {
                 const pkgCache::VerIterator &ver = findTransactionPackage(m_lastPackage);
                 if (!ver.end()) {
-                    emitPackage(ver, PK_INFO_ENUM_FINISHED);
+                    emitPackageProgress(ver, PK_STATUS_ENUM_FINISHED, 100);
                 }
                 m_lastSubProgress = 0;
             }
@@ -1917,7 +1923,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
             if (!m_lastPackage.empty()) {
                 const pkgCache::VerIterator &ver = findTransactionPackage(m_lastPackage);
                 if (!ver.end()) {
-                    emitPackage(ver, PK_INFO_ENUM_FINISHED);
+                    emitPackageProgress(ver, PK_STATUS_ENUM_FINISHED, 100);
                 }
             }
             m_lastSubProgress = 0;
@@ -1930,7 +1936,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
             if (m_lastSubProgress >= 100 && !m_lastPackage.empty()) {
                 const pkgCache::VerIterator &ver = findTransactionPackage(m_lastPackage);
                 if (!ver.end()) {
-                    emitPackage(ver, PK_INFO_ENUM_FINISHED);
+                    emitPackageProgress(ver, PK_STATUS_ENUM_FINISHED, 100);
                 }
             }
             m_lastSubProgress += 25;
@@ -1944,7 +1950,7 @@ void AptJob::handleDpkgStatusLine(const std::string &line, int writeFd, bool *er
             m_lastSubProgress = 100;
             const pkgCache::VerIterator &ver = findTransactionPackage(pkg);
             if (!ver.end()) {
-                emitPackage(ver, PK_INFO_ENUM_FINISHED);
+                emitPackageProgress(ver, PK_STATUS_ENUM_FINISHED, 100);
             }
         } else {
             g_warning("Unmaped dpkg status value: %s", line.c_str());

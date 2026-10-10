@@ -62,17 +62,17 @@ pk_alpm_pkg_emit (PkBackendJob *job, alpm_pkg_t *pkg, PkInfoEnum info)
 	g_free (package);
 }
 
-void
+PkPackage *
 pk_alpm_pkg_stage (GPtrArray *packages, alpm_pkg_t *pkg, PkInfoEnum info)
 {
 	g_autofree gchar *package_id = NULL;
 
-	g_return_if_fail (packages != NULL);
-	g_return_if_fail (pkg != NULL);
+	g_return_val_if_fail (packages != NULL, NULL);
+	g_return_val_if_fail (pkg != NULL, NULL);
 
 	package_id = pk_alpm_pkg_build_id (pkg);
-	pk_backend_packages_add (packages, info, package_id,
-				      alpm_pkg_get_desc (pkg), PK_INFO_ENUM_UNKNOWN);
+	return pk_backend_packages_add (packages, info, package_id,
+					alpm_pkg_get_desc (pkg), PK_SEVERITY_ENUM_NONE);
 }
 
 alpm_pkg_t *
@@ -192,8 +192,8 @@ pk_backend_resolve_name (PkBackendJob *job, GPtrArray *packages, const gchar *na
 	return FALSE;
 }
 
-static void
-pk_backend_resolve_thread (PkBackendJob *job, GVariant* params, gpointer p)
+void
+pk_alpm_resolve_thread (PkBackendJob *job, GVariant* params, gpointer p)
 {
 	const gchar **search;
 	PkBitfield filters;
@@ -219,23 +219,14 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant* params, gpointer p)
 }
 
 void
-pk_backend_resolve (PkBackend *self,
-		    PkBackendJob *job,
-		    PkBitfield filters,
-		    gchar      **search)
-{
-	g_return_if_fail (search != NULL);
-
-	pk_alpm_run (job, PK_STATUS_ENUM_QUERY, pk_backend_resolve_thread, NULL);
-}
-
-static void
-pk_backend_get_details_thread (PkBackendJob *job, GVariant* params, gpointer p)
+pk_alpm_get_details_thread (PkBackendJob *job, GVariant* params, gpointer p)
 {
 	gchar **packages;
+	g_autofree gchar **package_ids = NULL;
 	g_autoptr(GError) error = NULL;
 
-	packages = (gchar**) p;
+	g_variant_get (params, "(^a&s)", &package_ids);
+	packages = package_ids;
 
 	for (; *packages != NULL; ++packages) {
 		alpm_pkg_t *pkg;
@@ -279,23 +270,17 @@ pk_backend_get_details_thread (PkBackendJob *job, GVariant* params, gpointer p)
 }
 
 void
-pk_backend_get_details (PkBackend *self,
-			PkBackendJob *job,
-			gchar **package_ids)
-{
-	pk_alpm_run (job, PK_STATUS_ENUM_QUERY, pk_backend_get_details_thread, package_ids);
-}
-
-static void
-pk_backend_get_files_thread (PkBackendJob *job, GVariant* params, gpointer p)
+pk_alpm_get_files_thread (PkBackendJob *job, GVariant* params, gpointer p)
 {
 	PkBackend *backend = pk_backend_job_get_backend (job);
 	PkBackendAlpmPrivate *priv = pk_backend_get_user_data (backend);
 	gchar **packages;
+	g_autofree gchar **package_ids = NULL;
 	g_autoptr(GError) error = NULL;
 	const gchar *root;
 
-	packages = (gchar**) p;
+	g_variant_get (params, "(^a&s)", &package_ids);
+	packages = package_ids;
 	root = alpm_option_get_root (priv->alpm);
 
 	for (; *packages != NULL; ++packages) {
@@ -322,12 +307,4 @@ pk_backend_get_files_thread (PkBackendJob *job, GVariant* params, gpointer p)
 	}
 
 	pk_alpm_finish (job, error);
-}
-
-void
-pk_backend_get_files (PkBackend *self,
-		      PkBackendJob *job,
-		      gchar **package_ids)
-{
-	pk_alpm_run (job, PK_STATUS_ENUM_QUERY, pk_backend_get_files_thread, package_ids);
 }

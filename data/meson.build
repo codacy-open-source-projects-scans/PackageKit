@@ -4,7 +4,7 @@ subdir('policy')
 
 install_data(
   'pk-upgrade-distro.sh',
-  install_dir: join_paths(get_option('datadir'), 'PackageKit'),
+  install_dir: join_paths(get_option('datadir'), 'packagekit'),
 )
 
 dbus_config_data = configuration_data()
@@ -17,8 +17,8 @@ if dbus_sys_dir == ''
 endif
 
 configure_file(
-  input: 'org.freedesktop.PackageKit.conf.in',
-  output: 'org.freedesktop.PackageKit.conf',
+  input: 'org.freedesktop.packagekit1.conf.in',
+  output: 'org.freedesktop.packagekit1.conf',
   configuration: dbus_config_data,
   install: true,
   install_dir: dbus_sys_dir,
@@ -30,8 +30,8 @@ if dbus_services_dir == ''
 endif
 
 configure_file(
-  input: 'org.freedesktop.PackageKit.service.in',
-  output: 'org.freedesktop.PackageKit.service',
+  input: 'org.freedesktop.packagekit1.service.in',
+  output: 'org.freedesktop.packagekit1.service',
   configuration: dbus_config_data,
   install: true,
   install_dir: dbus_services_dir,

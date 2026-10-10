@@ -27,7 +27,7 @@
 
 G_BEGIN_DECLS
 
-/* see docs/backend-spawn-protocol.md */
+/* see docs/extra/backend-spawn-protocol.md */
 #define PK_BACKEND_PROTOCOL_VERSION  1
 #define PK_BACKEND_PROTOCOL_MAX_LINE (16 * 1024 * 1024)
 
@@ -56,7 +56,8 @@ gchar	       *pk_backend_protocol_build_exit (void);
 /* events: helper -> daemon */
 PkBackendHello *pk_backend_protocol_parse_hello (const gchar *line,
 						 GError	    **error);
-gboolean	pk_backend_protocol_handle_event (const gchar  *line,
+gboolean	pk_backend_protocol_handle_event (const gchar  *log_domain,
+						  const gchar  *line,
 						  const gchar  *job_id,
 						  PkBackendJob *job,
 						  gboolean     *finished,

@@ -56,6 +56,8 @@ typedef struct
 	guint socket_listen_id;
 	GCancellable *cancellable;
 	gulong signal_timeout;
+	gchar **package_ids;
+	gchar **values;
 } PkBackendDummyJobData;
 
 static PkBackendDummyPrivate *priv;
@@ -135,12 +137,12 @@ pk_backend_cancel (PkBackend *backend, PkBackendJob *job)
 	}
 }
 
-void
-pk_backend_depends_on (PkBackend *backend,
-		       PkBackendJob *job,
-		       PkBitfield filters,
-		       gchar **package_ids,
-		       gboolean recursive)
+static void
+backend_depends_on (PkBackend *backend,
+		    PkBackendJob *job,
+		    PkBitfield filters,
+		    gchar **package_ids,
+		    gboolean recursive)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -151,25 +153,25 @@ pk_backend_depends_on (PkBackend *backend,
 					 PK_INFO_ENUM_AVAILABLE,
 					 "scribus-clipart;1.3.4-1.fc8;i386;fedora;",
 					 "Clipart for scribus",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 	} else {
 		pk_backend_packages_add (packages,
 					 PK_INFO_ENUM_INSTALLED,
 					 "glib2;2.14.0;i386;fedora;",
 					 "The GLib library",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 		pk_backend_packages_add (packages,
 					 PK_INFO_ENUM_AVAILABLE,
 					 "gtk2;gtk2-2.11.6-6.fc8;i386;fedora;",
 					 "GTK+ Libraries for GIMP",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 	}
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **files)
+static void
+backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **files)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	pk_backend_job_set_percentage (job, 0);
@@ -188,8 +190,8 @@ pk_backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **fil
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **_files)
+static void
+backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **_files)
 {
 	const gchar *files[] = { "/usr/share/man/man1",
 				 "/usr/share/applications/dave.desktop",
@@ -202,8 +204,8 @@ pk_backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **_file
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_get_details (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
+static void
+backend_get_details (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 {
 	guint i;
 	guint len;
@@ -312,8 +314,8 @@ pk_backend_get_details (PkBackend *backend, PkBackendJob *job, gchar **package_i
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_get_distro_upgrades (PkBackend *backend, PkBackendJob *job)
+static void
+backend_get_distro_upgrades (PkBackend *backend, PkBackendJob *job)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	if (!priv->use_distro_upgrade)
@@ -327,8 +329,8 @@ out:
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
+static void
+backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 {
 	guint i;
 	guint len;
@@ -365,12 +367,12 @@ pk_backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_required_by (PkBackend *backend,
-			PkBackendJob *job,
-			PkBitfield filters,
-			gchar **package_ids,
-			gboolean recursive)
+static void
+backend_required_by (PkBackend *backend,
+		     PkBackendJob *job,
+		     PkBitfield filters,
+		     gchar **package_ids,
+		     gboolean recursive)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -379,12 +381,12 @@ pk_backend_required_by (PkBackend *backend,
 				 PK_INFO_ENUM_INSTALLED,
 				 "glib2;2.14.0;i386;fedora;",
 				 "The GLib library",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_packages_add (packages,
 				 PK_INFO_ENUM_INSTALLED,
 				 "gtk2;gtk2-2.11.6-6.fc8;i386;fedora;",
 				 "GTK+ Libraries for GIMP",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_finished (job);
 }
@@ -556,8 +558,8 @@ pk_backend_get_update_detail_timeout (gpointer data)
 	return FALSE;
 }
 
-void
-pk_backend_get_update_detail (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
+static void
+backend_get_update_detail (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
@@ -574,35 +576,36 @@ pk_backend_get_updates_timeout (gpointer data)
 
 	if (priv->use_blocked) {
 		if (!priv->updated_powertop && !priv->updated_kernel && !priv->updated_gtkhtml) {
-			pk_backend_packages_add (packages,
-						 PK_INFO_ENUM_BLOCKED,
-						 "vino;2.24.2.fc9;i386;fedora;",
-						 "Remote desktop server for the desktop",
-						 PK_INFO_ENUM_UNKNOWN);
+			pk_backend_packages_add (
+			    packages,
+			    PK_INFO_ENUM_BLOCKED,
+			    "vino;2.24.2.fc9;i386;fedora;",
+			    "Remote desktop server for the desktop",
+			    /* a blocked security update */
+			    pk_backend_default_update_severity (PK_INFO_ENUM_UPDATE_SECURITY));
 		}
 	}
-	/* frontends expect the update urgency as both the info and the severity */
 	if (!priv->updated_powertop) {
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_NORMAL,
+					 PK_INFO_ENUM_UPDATE,
 					 "powertop;1.8-1.fc8;i386;fedora;",
 					 "Power consumption monitor",
-					 PK_INFO_ENUM_NORMAL);
+					 PK_SEVERITY_ENUM_LOW);
 	}
 	if (!priv->updated_kernel) {
 		pk_backend_packages_add (
 		    packages,
-		    PK_INFO_ENUM_BUGFIX,
+		    PK_INFO_ENUM_UPDATE,
 		    "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed",
 		    "The Linux kernel (the core of the Linux operating system)",
-		    PK_INFO_ENUM_BUGFIX);
+		    PK_SEVERITY_ENUM_NONE);
 	}
 	if (!priv->updated_gtkhtml) {
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_SECURITY,
+					 PK_INFO_ENUM_UPDATE_SECURITY,
 					 "gtkhtml2;2.19.1-4.fc8;i386;fedora;",
 					 "An HTML widget for GTK+ 2.0",
-					 PK_INFO_ENUM_SECURITY);
+					 PK_SEVERITY_ENUM_CRITICAL);
 	}
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_finished (job);
@@ -610,8 +613,8 @@ pk_backend_get_updates_timeout (gpointer data)
 	return FALSE;
 }
 
-void
-pk_backend_get_updates (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
+static void
+backend_get_updates (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
@@ -680,11 +683,11 @@ pk_backend_install_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 	pk_backend_job_set_locked (job, FALSE);
 }
 
-void
-pk_backend_install_packages (PkBackend *backend,
-			     PkBackendJob *job,
-			     PkBitfield transaction_flags,
-			     gchar **package_ids)
+static void
+backend_install_packages (PkBackend *backend,
+			  PkBackendJob *job,
+			  PkBitfield transaction_flags,
+			  gchar **package_ids)
 {
 	const gchar *license_agreement;
 	const gchar *eula_id;
@@ -698,41 +701,41 @@ pk_backend_install_packages (PkBackend *backend,
 		pk_backend_job_set_status (job, PK_STATUS_ENUM_DEP_RESOLVE);
 
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_REMOVING,
+					 PK_INFO_ENUM_REMOVE,
 					 "powertop;1.8-1.fc8;i386;fedora;",
 					 "Power consumption monitor",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_INSTALLING,
+					 PK_INFO_ENUM_INSTALL,
 					 "gtk2;2.11.6-6.fc8;i386;fedora;",
 					 "GTK+ Libraries for GIMP",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_UPDATING,
+					 PK_INFO_ENUM_UPDATE,
 					 "lib7;7.0.1-6.fc13;i386;fedora;",
 					 "C Libraries",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_REINSTALLING,
+					 PK_INFO_ENUM_REINSTALL,
 					 "libssl;3.5.7-2.fc13;i386;fedora;",
 					 "SSL Libraries",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 
 		pk_backend_packages_add (
 		    packages,
-		    PK_INFO_ENUM_DOWNGRADING,
+		    PK_INFO_ENUM_DOWNGRADE,
 		    "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed",
 		    "The Linux kernel (the core of the Linux operating system)",
-		    PK_INFO_ENUM_UNKNOWN);
+		    PK_SEVERITY_ENUM_NONE);
 
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_UPDATING,
+					 PK_INFO_ENUM_UPDATE,
 					 "gtkhtml2;2.19.1-4.fc8;i386;fedora;",
 					 "An HTML widget for GTK+ 2.0",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 
 		pk_backend_job_packages (job, packages);
 		pk_backend_job_finished (job);
@@ -824,12 +827,12 @@ pk_backend_install_packages (PkBackend *backend,
 	pk_backend_job_thread_create (job, pk_backend_install_thread, NULL, NULL);
 }
 
-void
-pk_backend_install_signature (PkBackend *backend,
-			      PkBackendJob *job,
-			      PkSigTypeEnum type,
-			      const gchar *key_id,
-			      const gchar *package_id)
+static void
+backend_install_signature (PkBackend *backend,
+			   PkBackendJob *job,
+			   PkSigTypeEnum type,
+			   const gchar *key_id,
+			   const gchar *package_id)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_INSTALL);
 	if (type == PK_SIGTYPE_ENUM_GPG &&
@@ -855,11 +858,11 @@ pk_backend_install_files_timeout (gpointer data)
 	return FALSE;
 }
 
-void
-pk_backend_install_files (PkBackend *backend,
-			  PkBackendJob *job,
-			  PkBitfield transaction_flags,
-			  gchar **full_paths)
+static void
+backend_install_files (PkBackend *backend,
+		       PkBackendJob *job,
+		       PkBitfield transaction_flags,
+		       gchar **full_paths)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_INSTALL);
@@ -902,8 +905,8 @@ pk_backend_refresh_cache_thread (PkBackendJob *job, GVariant *params, gpointer u
 	pk_backend_job_set_locked (job, FALSE);
 }
 
-void
-pk_backend_refresh_cache (PkBackend *backend, PkBackendJob *job, gboolean force)
+static void
+backend_refresh_cache (PkBackend *backend, PkBackendJob *job, gboolean force)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	job_data->progress_percentage = 0;
@@ -954,7 +957,7 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 							 PK_INFO_ENUM_AVAILABLE,
 							 "vips-doc;7.12.4-2.fc8;noarch;linva;",
 							 "The vips documentation package.",
-							 PK_INFO_ENUM_UNKNOWN);
+							 PK_SEVERITY_ENUM_NONE);
 			}
 		} else if (g_strcmp0 (search[i], "glib2") == 0 ||
 			   g_strcmp0 (search[i], "glib2;2.14.0;i386;fedora;") == 0) {
@@ -963,7 +966,7 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 							 PK_INFO_ENUM_INSTALLED,
 							 "glib2;2.14.0;i386;fedora;",
 							 "The GLib library",
-							 PK_INFO_ENUM_UNKNOWN);
+							 PK_SEVERITY_ENUM_NONE);
 			}
 		} else if (g_strcmp0 (search[i], "powertop") == 0 ||
 			   g_strcmp0 (search[i], "powertop;1.8-1.fc8;i386;fedora;") == 0)
@@ -971,7 +974,7 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 						 PK_INFO_ENUM_INSTALLED,
 						 "powertop;1.8-1.fc8;i386;fedora;",
 						 "Power consumption monitor",
-						 PK_INFO_ENUM_UNKNOWN);
+						 PK_SEVERITY_ENUM_NONE);
 		else if (g_strcmp0 (search[i], "kernel") == 0 ||
 			 g_strcmp0 (search[i],
 				    "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed") == 0)
@@ -980,14 +983,14 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 			    PK_INFO_ENUM_INSTALLED,
 			    "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed",
 			    "The Linux kernel (the core of the Linux operating system)",
-			    PK_INFO_ENUM_UNKNOWN);
+			    PK_SEVERITY_ENUM_NONE);
 		else if (g_strcmp0 (search[i], "gtkhtml2") == 0 ||
 			 g_strcmp0 (search[i], "gtkhtml2;2.19.1-4.fc8;i386;fedora;") == 0)
 			pk_backend_packages_add (packages,
 						 PK_INFO_ENUM_INSTALLED,
 						 "gtkhtml2;2.19.1-4.fc8;i386;fedora;",
 						 "An HTML widget for GTK+ 2.0",
-						 PK_INFO_ENUM_UNKNOWN);
+						 PK_SEVERITY_ENUM_NONE);
 		else if (g_strcmp0 (search[i], "foobar") == 0 ||
 			 g_strcmp0 (search[i], "foobar;1.1.0;i386;debian;") == 0) {
 			if (!pk_bitfield_contain (filters, PK_FILTER_ENUM_INSTALLED)) {
@@ -995,7 +998,7 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 							 PK_INFO_ENUM_AVAILABLE,
 							 "foobar;1.1.0;i386;debian;",
 							 "The awesome FooBar application",
-							 PK_INFO_ENUM_UNKNOWN);
+							 PK_SEVERITY_ENUM_NONE);
 			}
 		} else if (g_strcmp0 (search[i], "libawesome") == 0 ||
 			   g_strcmp0 (search[i], "libawesome;42;i386;debian;") == 0) {
@@ -1004,7 +1007,7 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 							 PK_INFO_ENUM_AVAILABLE,
 							 "libawesome;42;i386;debian;",
 							 "Simple library for warping reality",
-							 PK_INFO_ENUM_UNKNOWN);
+							 PK_SEVERITY_ENUM_NONE);
 			}
 		}
 	}
@@ -1012,19 +1015,19 @@ pk_backend_resolve_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 	pk_backend_job_set_percentage (job, 100);
 }
 
-void
-pk_backend_resolve (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **packages)
+static void
+backend_resolve (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **packages)
 {
 	pk_backend_job_thread_create (job, pk_backend_resolve_thread, NULL, NULL);
 }
 
-void
-pk_backend_remove_packages (PkBackend *backend,
-			    PkBackendJob *job,
-			    PkBitfield transaction_flags,
-			    gchar **package_ids,
-			    gboolean allow_deps,
-			    gboolean autoremove)
+static void
+backend_remove_packages (PkBackend *backend,
+			 PkBackendJob *job,
+			 PkBitfield transaction_flags,
+			 gchar **package_ids,
+			 gboolean allow_deps,
+			 gboolean autoremove)
 {
 	/* check if something else locked the "fake-db" */
 	if (priv->fake_db_locked) {
@@ -1059,21 +1062,18 @@ pk_backend_search_details_thread (PkBackendJob *job, GVariant *params, gpointer 
 				 PK_INFO_ENUM_AVAILABLE,
 				 "vips-doc;7.12.4-2.fc8;noarch;linva;",
 				 "The vips \"documentation\" package.",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_job_packages (job, packages);
 }
 
-void
-pk_backend_search_details (PkBackend *backend,
-			   PkBackendJob *job,
-			   PkBitfield filters,
-			   gchar **values)
+static void
+backend_search_details (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
 	pk_backend_job_thread_create (job, pk_backend_search_details_thread, NULL, NULL);
 }
 
-void
-pk_backend_search_files (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
+static void
+backend_search_files (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -1084,19 +1084,19 @@ pk_backend_search_files (PkBackend *backend, PkBackendJob *job, PkBitfield filte
 					 PK_INFO_ENUM_AVAILABLE,
 					 "vips-doc;7.12.4-2.fc8;noarch;linva;",
 					 "The vips documentation package",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 	else
 		pk_backend_packages_add (packages,
 					 PK_INFO_ENUM_INSTALLED,
 					 "vips-doc;7.12.4-2.fc8;noarch;linva;",
 					 "The vips documentation package",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_search_groups (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
+static void
+backend_search_groups (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -1106,12 +1106,12 @@ pk_backend_search_groups (PkBackend *backend, PkBackendJob *job, PkBitfield filt
 				 PK_INFO_ENUM_AVAILABLE,
 				 "vips-doc;7.12.4-2.fc8;noarch;linva;",
 				 "The vips documentation package.",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_packages_add (packages,
 				 PK_INFO_ENUM_AVAILABLE,
 				 "bǣwulf-utf8;0.1;noarch;hughsie;data",
 				 "The bǣwulf server test name.",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_finished (job);
 }
@@ -1151,34 +1151,34 @@ pk_backend_search_names_thread (PkBackendJob *job, GVariant *params, gpointer us
 					 PK_INFO_ENUM_INSTALLED,
 					 "evince;0.9.3-5.fc8;i386;;installed",
 					 "PDF Dokument Ƥrŏgrȃɱ",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 	} else {
 		pk_backend_packages_add (packages,
 					 PK_INFO_ENUM_INSTALLED,
 					 "evince;0.9.3-5.fc8;i386;;installed",
 					 "PDF Document viewer",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 	}
 	pk_backend_packages_add (packages,
 				 PK_INFO_ENUM_INSTALLED,
 				 "tetex;3.0-41.fc8;i386;fedora;",
 				 "TeTeX is an implementation of TeX for Linux or UNIX systems.",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_packages_add (packages,
 				 PK_INFO_ENUM_AVAILABLE,
 				 "scribus;1.3.4-1.fc8;i386;fedora;",
 				 "Scribus is an desktop open source page layout program",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_packages_add (packages,
 				 PK_INFO_ENUM_AVAILABLE,
 				 "vips-doc;7.12.4-2.fc8;noarch;linva;",
 				 "The vips documentation package.",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_job_packages (job, packages);
 }
 
-void
-pk_backend_search_names (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
+static void
+backend_search_names (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
 	pk_backend_job_set_percentage (job, PK_BACKEND_PERCENTAGE_INVALID);
 	pk_backend_job_set_allow_cancel (job, TRUE);
@@ -1440,11 +1440,11 @@ pk_backend_socket_has_data_cb (GSocket *socket, GIOCondition condition, PkBacken
 	return TRUE;
 }
 
-void
-pk_backend_update_packages (PkBackend *backend,
-			    PkBackendJob *job,
-			    PkBitfield transaction_flags,
-			    gchar **package_ids)
+static void
+backend_update_packages (PkBackend *backend,
+			 PkBackendJob *job,
+			 PkBitfield transaction_flags,
+			 gchar **package_ids)
 {
 	const gchar *eula_id;
 	const gchar *license_agreement;
@@ -1602,8 +1602,8 @@ pk_backend_update_packages (PkBackend *backend,
 	pk_backend_job_thread_create (job, pk_backend_update_packages_download_thread, NULL, NULL);
 }
 
-void
-pk_backend_get_repo_list (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
+static void
+backend_get_repo_list (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	pk_backend_job_repo_detail (job, "fedora", "Fedora - 9", priv->repo_enabled_fedora);
@@ -1620,8 +1620,8 @@ pk_backend_get_repo_list (PkBackend *backend, PkBackendJob *job, PkBitfield filt
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_repo_enable (PkBackend *backend, PkBackendJob *job, const gchar *rid, gboolean enabled)
+static void
+backend_repo_enable (PkBackend *backend, PkBackendJob *job, const gchar *rid, gboolean enabled)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_REQUEST);
 
@@ -1643,12 +1643,12 @@ pk_backend_repo_enable (PkBackend *backend, PkBackendJob *job, const gchar *rid,
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_repo_set_data (PkBackend *backend,
-			  PkBackendJob *job,
-			  const gchar *rid,
-			  const gchar *parameter,
-			  const gchar *value)
+static void
+backend_repo_set_data (PkBackend *backend,
+		       PkBackendJob *job,
+		       const gchar *rid,
+		       const gchar *parameter,
+		       const gchar *value)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_REQUEST);
 	g_warning ("REPO '%s' PARAMETER '%s' TO '%s'", rid, parameter, value);
@@ -1682,7 +1682,7 @@ pk_backend_what_provides_timeout (gpointer data)
 			    PK_INFO_ENUM_AVAILABLE,
 			    "gstreamer-plugins-bad;0.10.3-5.lvn;i386;livna;",
 			    "GStreamer streaming media framework \"bad\" plug-ins",
-			    PK_INFO_ENUM_UNKNOWN);
+			    PK_SEVERITY_ENUM_NONE);
 		} else if (g_strcmp0 (priv->values[0],
 				      "gstreamer0.10(decoder-video/x-wma)(wmaversion=3)") == 0) {
 			pk_backend_packages_add (
@@ -1690,7 +1690,7 @@ pk_backend_what_provides_timeout (gpointer data)
 			    PK_INFO_ENUM_AVAILABLE,
 			    "gstreamer-plugins-flumpegdemux;0.10.15-5.lvn;i386;livna;",
 			    "MPEG demuxer for GStreamer",
-			    PK_INFO_ENUM_UNKNOWN);
+			    PK_SEVERITY_ENUM_NONE);
 		} else {
 			/* pkcon install vips-doc says it's installed cause evince is INSTALLED */
 			if (g_strcmp0 (priv->values[0], "vips-doc") != 0) {
@@ -1701,7 +1701,7 @@ pk_backend_what_provides_timeout (gpointer data)
 					    PK_INFO_ENUM_INSTALLED,
 					    "evince;0.9.3-5.fc8;i386;;installed",
 					    "PDF Document viewer",
-					    PK_INFO_ENUM_UNKNOWN);
+					    PK_SEVERITY_ENUM_NONE);
 				}
 				if (!pk_bitfield_contain (priv->filters,
 							  PK_FILTER_ENUM_INSTALLED)) {
@@ -1711,7 +1711,7 @@ pk_backend_what_provides_timeout (gpointer data)
 					    "scribus;1.3.4-1.fc8;i386;fedora;",
 					    "Scribus is an desktop open source "
 					    "page layout program",
-					    PK_INFO_ENUM_UNKNOWN);
+					    PK_SEVERITY_ENUM_NONE);
 				}
 			}
 		}
@@ -1724,8 +1724,8 @@ pk_backend_what_provides_timeout (gpointer data)
 	return TRUE;
 }
 
-void
-pk_backend_what_provides (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
+static void
+backend_what_provides (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **values)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	priv->values = values;
@@ -1736,8 +1736,8 @@ pk_backend_what_provides (PkBackend *backend, PkBackendJob *job, PkBitfield filt
 	pk_backend_job_set_percentage (job, 0);
 }
 
-void
-pk_backend_get_packages (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
+static void
+backend_get_packages (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -1746,16 +1746,16 @@ pk_backend_get_packages (PkBackend *backend, PkBackendJob *job, PkBitfield filte
 				 PK_INFO_ENUM_INSTALLED,
 				 "update1;2.19.1-4.fc8;i386;fedora;",
 				 "The first update",
-				 PK_INFO_ENUM_UNKNOWN);
+				 PK_SEVERITY_ENUM_NONE);
 	pk_backend_job_packages (job, packages);
 	pk_backend_job_finished (job);
 }
 
-void
-pk_backend_download_packages (PkBackend *backend,
-			      PkBackendJob *job,
-			      gchar **package_ids,
-			      const gchar *directory)
+static void
+backend_download_packages (PkBackend *backend,
+			   PkBackendJob *job,
+			   gchar **package_ids,
+			   const gchar *directory)
 {
 	gchar *filename;
 	gchar *to_strv[] = { NULL, NULL };
@@ -1797,20 +1797,20 @@ pk_backend_upgrade_system_timeout (gpointer data)
 		g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_INSTALLING,
+					 PK_INFO_ENUM_INSTALL,
 					 "gtk2;2.11.6-6.fc8;i386;fedora;",
 					 "GTK+ Libraries for GIMP",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_REMOVING,
+					 PK_INFO_ENUM_REMOVE,
 					 "gnome-software;2.18.2.fc24;i386;fedora;",
 					 "Software center for GNOME",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 		pk_backend_packages_add (packages,
-					 PK_INFO_ENUM_UPDATING,
+					 PK_INFO_ENUM_UPDATE,
 					 "lib7;7.0.1-6.fc13;i386;fedora;",
 					 "C Libraries",
-					 PK_INFO_ENUM_UNKNOWN);
+					 PK_SEVERITY_ENUM_NONE);
 		pk_backend_job_packages (job, packages);
 		pk_backend_job_finished (job);
 		return FALSE;
@@ -1855,12 +1855,12 @@ pk_backend_upgrade_system_timeout (gpointer data)
 	return TRUE;
 }
 
-void
-pk_backend_upgrade_system (PkBackend *backend,
-			   PkBackendJob *job,
-			   PkBitfield transaction_flags,
-			   const gchar *distro_id,
-			   PkUpgradeKindEnum upgrade_kind)
+static void
+backend_upgrade_system (PkBackend *backend,
+			PkBackendJob *job,
+			PkBitfield transaction_flags,
+			const gchar *distro_id,
+			PkUpgradeKindEnum upgrade_kind)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_DOWNLOAD);
@@ -1868,10 +1868,288 @@ pk_backend_upgrade_system (PkBackend *backend,
 	job_data->signal_timeout = g_timeout_add (100, pk_backend_upgrade_system_timeout, job);
 }
 
-void
-pk_backend_repair_system (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags)
+static void
+backend_repair_system (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags)
 {
 	pk_backend_job_finished (job);
+}
+
+void
+pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
+{
+	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
+	GVariant *params = pk_backend_job_get_parameters (job);
+	PkRoleEnum role = pk_backend_job_get_role (job);
+
+	switch (role) {
+	case PK_ROLE_ENUM_DEPENDS_ON: {
+		PkBitfield filters;
+		g_autofree gchar **package_ids = NULL;
+		gboolean recursive;
+
+		g_variant_get (params, "(t^a&sb)", &filters, &package_ids, &recursive);
+		backend_depends_on (backend, job, filters, package_ids, recursive);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_DETAILS_LOCAL: {
+		g_autofree gchar **files = NULL;
+
+		g_variant_get (params, "(^a&s)", &files);
+		backend_get_details_local (backend, job, files);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_FILES_LOCAL: {
+		g_autofree gchar **files = NULL;
+
+		g_variant_get (params, "(^a&s)", &files);
+		backend_get_files_local (backend, job, files);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_DETAILS: {
+		g_autofree gchar **package_ids = NULL;
+
+		g_variant_get (params, "(^a&s)", &package_ids);
+		backend_get_details (backend, job, package_ids);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_DISTRO_UPGRADES:
+		backend_get_distro_upgrades (backend, job);
+		break;
+	case PK_ROLE_ENUM_GET_FILES: {
+		g_autofree gchar **package_ids = NULL;
+
+		g_variant_get (params, "(^a&s)", &package_ids);
+		backend_get_files (backend, job, package_ids);
+		break;
+	}
+	case PK_ROLE_ENUM_REQUIRED_BY: {
+		PkBitfield filters;
+		g_autofree gchar **package_ids = NULL;
+		gboolean recursive;
+
+		g_variant_get (params, "(t^a&sb)", &filters, &package_ids, &recursive);
+		backend_required_by (backend, job, filters, package_ids, recursive);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
+		g_variant_get (params, "(^a&s)", &job_data->package_ids);
+		backend_get_update_detail (backend, job, job_data->package_ids);
+		break;
+	case PK_ROLE_ENUM_GET_UPDATES: {
+		PkBitfield filters;
+
+		g_variant_get (params, "(t)", &filters);
+		backend_get_updates (backend, job, filters);
+		break;
+	}
+	case PK_ROLE_ENUM_INSTALL_PACKAGES: {
+		PkBitfield transaction_flags;
+		g_autofree gchar **package_ids = NULL;
+
+		g_variant_get (params, "(t^a&s)", &transaction_flags, &package_ids);
+		backend_install_packages (backend, job, transaction_flags, package_ids);
+		break;
+	}
+	case PK_ROLE_ENUM_INSTALL_SIGNATURE: {
+		guint32 type;
+		const gchar *key_id;
+		const gchar *package_id;
+
+		g_variant_get (params, "(u&s&s)", &type, &key_id, &package_id);
+		backend_install_signature (backend, job, (PkSigTypeEnum) type, key_id, package_id);
+		break;
+	}
+	case PK_ROLE_ENUM_INSTALL_FILES: {
+		PkBitfield transaction_flags;
+		g_autofree gchar **full_paths = NULL;
+
+		g_variant_get (params, "(t^a&s)", &transaction_flags, &full_paths);
+		backend_install_files (backend, job, transaction_flags, full_paths);
+		break;
+	}
+	case PK_ROLE_ENUM_REFRESH_CACHE: {
+		gboolean force;
+
+		g_variant_get (params, "(b)", &force);
+		backend_refresh_cache (backend, job, force);
+		break;
+	}
+	case PK_ROLE_ENUM_RESOLVE: {
+		PkBitfield filters;
+		g_autofree gchar **packages = NULL;
+
+		g_variant_get (params, "(t^a&s)", &filters, &packages);
+		backend_resolve (backend, job, filters, packages);
+		break;
+	}
+	case PK_ROLE_ENUM_REMOVE_PACKAGES: {
+		PkBitfield transaction_flags;
+		g_autofree gchar **package_ids = NULL;
+		gboolean allow_deps;
+		gboolean autoremove;
+
+		g_variant_get (params,
+			       "(t^a&sbb)",
+			       &transaction_flags,
+			       &package_ids,
+			       &allow_deps,
+			       &autoremove);
+		backend_remove_packages (backend,
+					 job,
+					 transaction_flags,
+					 package_ids,
+					 allow_deps,
+					 autoremove);
+		break;
+	}
+	case PK_ROLE_ENUM_SEARCH_DETAILS: {
+		PkBitfield filters;
+		g_autofree gchar **values = NULL;
+
+		g_variant_get (params, "(t^a&s)", &filters, &values);
+		backend_search_details (backend, job, filters, values);
+		break;
+	}
+	case PK_ROLE_ENUM_SEARCH_FILE: {
+		PkBitfield filters;
+		g_autofree gchar **values = NULL;
+
+		g_variant_get (params, "(t^a&s)", &filters, &values);
+		backend_search_files (backend, job, filters, values);
+		break;
+	}
+	case PK_ROLE_ENUM_SEARCH_GROUP: {
+		PkBitfield filters;
+		g_autofree gchar **values = NULL;
+
+		g_variant_get (params, "(t^a&s)", &filters, &values);
+		backend_search_groups (backend, job, filters, values);
+		break;
+	}
+	case PK_ROLE_ENUM_SEARCH_NAME: {
+		PkBitfield filters;
+		g_autofree gchar **values = NULL;
+
+		g_variant_get (params, "(t^a&s)", &filters, &values);
+		backend_search_names (backend, job, filters, values);
+		break;
+	}
+	case PK_ROLE_ENUM_UPDATE_PACKAGES: {
+		PkBitfield transaction_flags;
+
+		g_variant_get (params, "(t^a&s)", &transaction_flags, &job_data->package_ids);
+		backend_update_packages (backend, job, transaction_flags, job_data->package_ids);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_REPO_LIST: {
+		PkBitfield filters;
+
+		g_variant_get (params, "(t)", &filters);
+		backend_get_repo_list (backend, job, filters);
+		break;
+	}
+	case PK_ROLE_ENUM_REPO_ENABLE: {
+		const gchar *rid;
+		gboolean enabled;
+
+		g_variant_get (params, "(&sb)", &rid, &enabled);
+		backend_repo_enable (backend, job, rid, enabled);
+		break;
+	}
+	case PK_ROLE_ENUM_REPO_SET_DATA: {
+		const gchar *rid;
+		const gchar *parameter;
+		const gchar *value;
+
+		g_variant_get (params, "(&s&s&s)", &rid, &parameter, &value);
+		backend_repo_set_data (backend, job, rid, parameter, value);
+		break;
+	}
+	case PK_ROLE_ENUM_WHAT_PROVIDES: {
+		PkBitfield filters;
+
+		g_variant_get (params, "(t^a&s)", &filters, &job_data->values);
+		backend_what_provides (backend, job, filters, job_data->values);
+		break;
+	}
+	case PK_ROLE_ENUM_GET_PACKAGES: {
+		PkBitfield filters;
+
+		g_variant_get (params, "(t)", &filters);
+		backend_get_packages (backend, job, filters);
+		break;
+	}
+	case PK_ROLE_ENUM_DOWNLOAD_PACKAGES: {
+		g_autofree gchar **package_ids = NULL;
+		const gchar *directory;
+
+		g_variant_get (params, "(^a&s&s)", &package_ids, &directory);
+		backend_download_packages (backend, job, package_ids, directory);
+		break;
+	}
+	case PK_ROLE_ENUM_UPGRADE_SYSTEM: {
+		PkBitfield transaction_flags;
+		const gchar *distro_id;
+		guint32 upgrade_kind;
+
+		g_variant_get (params, "(t&su)", &transaction_flags, &distro_id, &upgrade_kind);
+		backend_upgrade_system (backend,
+					job,
+					transaction_flags,
+					distro_id,
+					(PkUpgradeKindEnum) upgrade_kind);
+		break;
+	}
+	case PK_ROLE_ENUM_REPAIR_SYSTEM: {
+		PkBitfield transaction_flags;
+
+		g_variant_get (params, "(t)", &transaction_flags);
+		backend_repair_system (backend, job, transaction_flags);
+		break;
+	}
+	default:
+		pk_backend_job_error_code (job,
+					   PK_ERROR_ENUM_NOT_SUPPORTED,
+					   "role %s is not supported",
+					   pk_role_enum_to_string (role));
+		pk_backend_job_finished (job);
+		break;
+	}
+}
+
+PkBitfield
+pk_backend_get_roles (PkBackend *backend)
+{
+	return pk_bitfield_from_enums (PK_ROLE_ENUM_CANCEL,
+				       PK_ROLE_ENUM_DEPENDS_ON,
+				       PK_ROLE_ENUM_GET_DETAILS_LOCAL,
+				       PK_ROLE_ENUM_GET_FILES_LOCAL,
+				       PK_ROLE_ENUM_GET_DETAILS,
+				       PK_ROLE_ENUM_GET_DISTRO_UPGRADES,
+				       PK_ROLE_ENUM_GET_FILES,
+				       PK_ROLE_ENUM_REQUIRED_BY,
+				       PK_ROLE_ENUM_GET_UPDATE_DETAIL,
+				       PK_ROLE_ENUM_GET_UPDATES,
+				       PK_ROLE_ENUM_INSTALL_PACKAGES,
+				       PK_ROLE_ENUM_INSTALL_SIGNATURE,
+				       PK_ROLE_ENUM_INSTALL_FILES,
+				       PK_ROLE_ENUM_REFRESH_CACHE,
+				       PK_ROLE_ENUM_RESOLVE,
+				       PK_ROLE_ENUM_REMOVE_PACKAGES,
+				       PK_ROLE_ENUM_SEARCH_DETAILS,
+				       PK_ROLE_ENUM_SEARCH_FILE,
+				       PK_ROLE_ENUM_SEARCH_GROUP,
+				       PK_ROLE_ENUM_SEARCH_NAME,
+				       PK_ROLE_ENUM_UPDATE_PACKAGES,
+				       PK_ROLE_ENUM_GET_REPO_LIST,
+				       PK_ROLE_ENUM_REPO_ENABLE,
+				       PK_ROLE_ENUM_REPO_SET_DATA,
+				       PK_ROLE_ENUM_WHAT_PROVIDES,
+				       PK_ROLE_ENUM_GET_PACKAGES,
+				       PK_ROLE_ENUM_DOWNLOAD_PACKAGES,
+				       PK_ROLE_ENUM_UPGRADE_SYSTEM,
+				       PK_ROLE_ENUM_REPAIR_SYSTEM,
+				       -1);
 }
 
 void
@@ -1902,6 +2180,8 @@ pk_backend_stop_job (PkBackend *backend, PkBackendJob *job)
 	g_object_unref (job_data->cancellable);
 
 	/* destroy state for this job */
+	g_free (job_data->package_ids);
+	g_free (job_data->values);
 	g_free (job_data);
 }
 
