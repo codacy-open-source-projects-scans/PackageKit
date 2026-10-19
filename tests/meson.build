@@ -5,14 +5,15 @@
 # location below it, and all state the daemon writes ends up below it, so a
 # test run never touches the host system.
 pk_test_root_dir = join_paths(meson.current_build_dir(), '_test-root')
+
 # spawned backends and the Python library are linked into the root at their
 # installed locations
 pk_test_root_links = [
     '--link', join_paths(pk_backends_dir, 'test_spawn') + '='
-              + join_paths(source_root, 'backends', 'test', 'helpers', 'test_spawn'),
+    + join_paths(meson.current_source_dir(), 'backends', 'test_spawn'),
 ]
 pk_test_root_deps = []
-if get_option('python_backend')
+if get_option('python-backend')
     pk_test_root_links += [
         '--link', pk_python_dir + '=' + join_paths(build_root, 'src', 'python'),
     ]
@@ -48,9 +49,9 @@ pk_test_lib_exe = executable(
     'pk-test-library',
     'pk-test-library.c',
     pk_enum_type,
-    packagekitprivate_sources,
-    packagekit_glib2_sources,
-    include_directories: packagekit_glib2_includes,
+    libpackagekit_priv_src,
+    libpackagekit_src,
+    include_directories: libpackagekit_includes,
     dependencies: [
         glib_dep,
         gobject_dep,
@@ -77,10 +78,10 @@ test(
 pk_test_daemon_priv_exe = executable(
     'pk-test-daemon-internal',
     'pk-test-daemon-internal.c',
-    shared_sources,
+    pk_daemon_shared_src,
     pk_resources,
     dependencies: [
-        packagekit_glib2_dep,
+        libpackagekit_dep,
         jansson_dep,
         libsystemd,
         elogind,
@@ -92,12 +93,9 @@ pk_test_daemon_priv_exe = executable(
     c_args: [
         '-DPK_BUILD_DAEMON=1',
         '-DPK_DB_DIR="@0@"'.format(pk_db_dir),
-        '-DLIBDIR="@0@"'.format(join_paths(get_option('prefix'), get_option('libdir'))),
-        '-DDATADIR="@0@"'.format(join_paths(get_option('prefix'), get_option('datadir'))),
         '-DLIBEXECDIR="@0@"'.format(join_paths(get_option('prefix'), get_option('libexecdir'))),
         '-DTESTDATADIR="@0@"'.format(test_data_dir),
         '-DGETTEXT_PACKAGE="@0@"'.format(meson.project_name()),
-        '-DLOCALSTATEDIR="@0@"'.format(local_state_dir),
         '-DSOURCEROOTDIR="@0@"'.format(source_root),
         '-DPK_TEST_CONF_FILE="@0@"'.format(pk_test_conf_file),
     ]
@@ -107,7 +105,7 @@ pk_test_e2e_exe = executable(
     'pk-test-e2e',
     'pk-test-e2e.c',
     dependencies: [
-        packagekit_glib2_dep,
+        libpackagekit_dep,
         glib_dep,
         gobject_dep,
         gio_dep,
@@ -124,7 +122,7 @@ pk_test_e2e_exe = executable(
     install: false,
 )
 
-if get_option('python_backend')
+if get_option('python-backend')
     test('pk-test-python-backend',
         find_program('pk-test-python-backend.py'),
         depends: pk_backend_py,
@@ -139,9 +137,12 @@ endif
 # Integration test that drives a live packagekitd (dummy backend) over D-Bus. It
 # needs the D-Bus/polkit policy installed to system paths, so we allow it to auto-SKIP
 # in case those are not installed.
-if get_option('daemon_tests')
+if get_option('daemon-tests')
     run_with_dbus = find_program('runner/run-ensure-dbus.py')
     run_daemon_test = find_program('runner/run-daemon-test.py')
+
+    # our backend stubs for testing purposes are needed
+    subdir('backends')
 
     test('pk-test-daemon-internal',
         run_with_dbus,
@@ -158,12 +159,12 @@ if get_option('daemon_tests')
     test('pk-test-e2e',
         run_daemon_test,
         args: [
-          '--daemon', packagekitd_exec,
-          '--test', pk_test_e2e_exe,
-          '--config', pk_test_conf_file,
+            '--daemon', packagekitd_exe,
+            '--test', pk_test_e2e_exe,
+            '--config', pk_test_conf_file,
         ],
         depends: [
-            packagekitd_exec,
+            packagekitd_exe,
             pk_test_e2e_exe,
             pk_test_root,
         ],

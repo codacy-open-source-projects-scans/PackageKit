@@ -399,11 +399,21 @@ pkgc_option_context_for_command (PkgcliContext *ctx,
 				 const gchar *description)
 {
 	GOptionContext *option_context = NULL;
+	g_autofree gchar *alias_note = NULL;
+	g_autofree gchar *full_description = NULL;
+
+	if (description == NULL)
+		description = cmd->summary;
+	if (cmd->alias != NULL) {
+		/* TRANSLATORS: Shown in the help of a command, %s is a shorter alternative name for it */
+		alias_note = g_strdup_printf (_("Alias: %s"), cmd->alias);
+		full_description = g_strconcat (description, "\n", alias_note, NULL);
+		description = full_description;
+	}
 
 	option_context = g_option_context_new (parameter_summary);
 	g_option_context_set_help_enabled (option_context, TRUE);
-	g_option_context_set_description (option_context,
-					  (description != NULL) ? description : cmd->summary);
+	g_option_context_set_description (option_context, description);
 
 	if (parameter_summary == NULL)
 		parameter_summary = "";
@@ -509,6 +519,10 @@ pkgc_print_package (PkgcliContext *ctx, PkPackage *package)
 		break;
 	case PK_INFO_ENUM_AVAILABLE:
 		info_color = COLOR_BLUE;
+		info_symbol = SYMBOL_PACKAGE;
+		break;
+	case PK_INFO_ENUM_RESIDUAL:
+		info_color = COLOR_YELLOW;
 		info_symbol = SYMBOL_PACKAGE;
 		break;
 	case PK_INFO_ENUM_UPDATE:
@@ -743,16 +757,13 @@ pkgc_print_update_detail (PkgcliContext *ctx, PkUpdateDetail *update)
 	PkRestartEnum restart;
 	PkUpdateStateEnum state;
 	g_autofree gchar *changelog = NULL;
-	g_autofree gchar *issued = NULL;
+	g_autofree gchar *time_issued = NULL;
 	g_autofree gchar *package_id = NULL;
 	g_autofree gchar *package = NULL;
-	g_autofree gchar *updated = NULL;
 	g_autofree gchar *update_text = NULL;
-	g_auto(GStrv) bugzilla_urls = NULL;
-	g_auto(GStrv) cve_urls = NULL;
 	g_auto(GStrv) obsoletes = NULL;
 	g_auto(GStrv) updates = NULL;
-	g_auto(GStrv) vendor_urls = NULL;
+	g_autoptr(GPtrArray) issues = NULL;
 	gchar *tmp;
 
 	if (!update)
@@ -766,12 +777,8 @@ pkgc_print_update_detail (PkgcliContext *ctx, PkUpdateDetail *update)
 		      &updates,
 		      "obsoletes",
 		      &obsoletes,
-		      "vendor-urls",
-		      &vendor_urls,
-		      "bugzilla-urls",
-		      &bugzilla_urls,
-		      "cve-urls",
-		      &cve_urls,
+		      "issues",
+		      &issues,
 		      "restart",
 		      &restart,
 		      "update-text",
@@ -780,10 +787,8 @@ pkgc_print_update_detail (PkgcliContext *ctx, PkUpdateDetail *update)
 		      &changelog,
 		      "state",
 		      &state,
-		      "issued",
-		      &issued,
-		      "updated",
-		      &updated,
+		      "time-issued",
+		      &time_issued,
 		      NULL);
 
 	package = pk_package_id_to_printable (package_id);
@@ -806,6 +811,32 @@ pkgc_print_update_detail (PkgcliContext *ctx, PkUpdateDetail *update)
 				json_array_append_new (obsoletes_array, json_string (*p));
 			}
 			json_object_set_new (root, "obsoletes", obsoletes_array);
+		}
+
+		if (issues != NULL && issues->len > 0) {
+			json_t *issues_array = json_array ();
+			for (guint i = 0; i < issues->len; i++) {
+				PkIssue *issue = g_ptr_array_index (issues, i);
+				json_t *obj = json_object ();
+				json_object_set_new (obj,
+						     "kind",
+						     json_string (pk_issue_kind_enum_to_string (
+							 pk_issue_get_kind (issue))));
+				json_object_set_new (obj,
+						     "url",
+						     json_string (pk_issue_get_url (issue)));
+				if (pk_issue_get_id (issue) != NULL)
+					json_object_set_new (obj,
+							     "id",
+							     json_string (pk_issue_get_id (issue)));
+				if (pk_issue_get_title (issue) != NULL)
+					json_object_set_new (
+					    obj,
+					    "title",
+					    json_string (pk_issue_get_title (issue)));
+				json_array_append_new (issues_array, obj);
+			}
+			json_object_set_new (root, "issues", issues_array);
 		}
 
 		if (update_text)
@@ -845,31 +876,49 @@ pkgc_print_update_detail (PkgcliContext *ctx, PkUpdateDetail *update)
 			g_free (tmp);
 		}
 
-		if (vendor_urls && vendor_urls[0]) {
-			tmp = g_strjoinv (", ", vendor_urls);
-			g_print (" %s%s%s %s\n",
-				 get_color (ctx, COLOR_BOLD),
-				 /* TRANSLATORS: Label for vendor in update details */
-				 _("Vendor:"), get_reset_color (ctx), tmp);
-			g_free (tmp);
-		}
-
-		if (bugzilla_urls && bugzilla_urls[0]) {
-			tmp = g_strjoinv (", ", bugzilla_urls);
-			g_print (" %s%s%s %s\n",
-				 get_color (ctx, COLOR_BOLD),
-				 /* TRANSLATORS: Label for issue-tracker in update details */
-				 _("Issue Tracker:"), get_reset_color (ctx), tmp);
-			g_free (tmp);
-		}
-
-		if (cve_urls && cve_urls[0]) {
-			tmp = g_strjoinv (", ", cve_urls);
-			g_print (" %s%s%s %s\n",
-				 get_color (ctx, COLOR_BOLD),
-				 /* TRANSLATORS: Label for CVE information in update details */
-				 _("CVE:"), get_reset_color (ctx), tmp);
-			g_free (tmp);
+		if (issues != NULL && issues->len > 0) {
+			/* clang-format off */
+			const struct {
+				PkIssueKindEnum kind;
+				const gchar *label;
+			} groups[] = {
+				/* TRANSLATORS: Label for issue tracker entries in update details */
+				{ PK_ISSUE_KIND_ENUM_GENERIC, N_("Issues:") },
+				/* TRANSLATORS: Label for CVE records in update details */
+				{ PK_ISSUE_KIND_ENUM_CVE, N_("CVEs:") },
+				/* TRANSLATORS: Label for the distributor's advisory in update details */
+				{ PK_ISSUE_KIND_ENUM_ADVISORY, N_("Advisory:") },
+				/* TRANSLATORS: Label for references of unknown kind in update details */
+				{ PK_ISSUE_KIND_ENUM_UNKNOWN, N_("References:") },
+			};
+			/* clang-format on */
+			for (guint g = 0; g < G_N_ELEMENTS (groups); g++) {
+				gboolean first = TRUE;
+				for (guint i = 0; i < issues->len; i++) {
+					PkIssue *issue = g_ptr_array_index (issues, i);
+					const gchar *id = pk_issue_get_id (issue);
+					const gchar *title = pk_issue_get_title (issue);
+					if (pk_issue_get_kind (issue) != groups[g].kind)
+						continue;
+					if (first) {
+						g_print (" %s%s%s",
+							 get_color (ctx, COLOR_BOLD),
+							 _(groups[g].label), get_reset_color (ctx));
+						first = FALSE;
+					} else {
+						g_print (",");
+					}
+					if (id != NULL && title != NULL)
+						g_print (" %s (%s)", id, title);
+					else if (id != NULL)
+						g_print (" %s", id);
+					else if (title != NULL)
+						g_print (" %s", title);
+					g_print (" <%s>", pk_issue_get_url (issue));
+				}
+				if (!first)
+					g_print ("\n");
+			}
 		}
 
 		if (restart != PK_RESTART_ENUM_NONE) {
@@ -904,18 +953,11 @@ pkgc_print_update_detail (PkgcliContext *ctx, PkUpdateDetail *update)
 				   pk_update_state_enum_to_string (state));
 		}
 
-		if (issued && issued[0] != '\0') {
+		if (time_issued && time_issued[0] != '\0') {
 			g_print (" %s%s%s %s\n",
 				 get_color (ctx, COLOR_BOLD),
 				 /* TRANSLATORS: Label for issued date in update details */
-				 _("Issued:"), get_reset_color (ctx), issued);
-		}
-
-		if (updated && updated[0] != '\0') {
-			g_print (" %s%s%s %s\n",
-				 get_color (ctx, COLOR_BOLD),
-				 /* TRANSLATORS: Label for updated date in update details */
-				 _("Updated:"), get_reset_color (ctx), updated);
+				 _("Issued:"), get_reset_color (ctx), time_issued);
 		}
 	}
 }
@@ -973,20 +1015,18 @@ pkgc_print_repo (PkgcliContext *ctx, PkRepoDetail *repo)
  * Print transaction information based on the output mode.
  */
 void
-pkgc_print_transaction (PkgcliContext *ctx, PkTransactionPast *transaction)
+pkgc_print_transaction (PkgcliContext *ctx, PkHistoryItem *transaction)
 {
 	PkRoleEnum role;
 	const gchar *role_text;
 	gboolean succeeded;
 	guint duration;
 	guint uid;
-	guint lines_len;
 	struct passwd *pw;
+	GPtrArray *packages;
 	g_autofree gchar *cmdline = NULL;
-	g_autofree gchar *data = NULL;
 	g_autofree gchar *tid = NULL;
-	g_autofree gchar *timespec = NULL;
-	g_auto(GStrv) lines = NULL;
+	g_autofree gchar *time_started = NULL;
 
 	if (!transaction)
 		return;
@@ -997,8 +1037,8 @@ pkgc_print_transaction (PkgcliContext *ctx, PkTransactionPast *transaction)
 		      &role,
 		      "tid",
 		      &tid,
-		      "timespec",
-		      &timespec,
+		      "time-started",
+		      &time_started,
 		      "succeeded",
 		      &succeeded,
 		      "duration",
@@ -1007,9 +1047,8 @@ pkgc_print_transaction (PkgcliContext *ctx, PkTransactionPast *transaction)
 		      &cmdline,
 		      "uid",
 		      &uid,
-		      "data",
-		      &data,
 		      NULL);
+	packages = pk_history_item_get_packages (transaction);
 
 	role_text = pk_role_enum_to_string (role);
 
@@ -1020,7 +1059,9 @@ pkgc_print_transaction (PkgcliContext *ctx, PkTransactionPast *transaction)
 		json_object_set_new (root, "succeeded", json_boolean (succeeded));
 		json_object_set_new (root, "duration", json_integer (duration));
 		json_object_set_new (root, "uid", json_integer (uid));
-		json_object_set_new (root, "timespec", json_string (timespec ? timespec : ""));
+		json_object_set_new (root,
+				     "time_started",
+				     json_string (time_started ? time_started : ""));
 
 		if (cmdline && cmdline[0] != '\0')
 			json_object_set_new (root, "cmdline", json_string (cmdline));
@@ -1036,7 +1077,7 @@ pkgc_print_transaction (PkgcliContext *ctx, PkTransactionPast *transaction)
 	g_print (" %s%s%s %s\n",
 		 get_color (ctx, COLOR_BOLD),
 		 /* TRANSLATORS: Label for system time of the transaction */
-		 _("System time:"), get_reset_color (ctx), timespec ? timespec : "");
+		 _("System time:"), get_reset_color (ctx), time_started ? time_started : "");
 	g_print (" %s%s%s %s%s%s\n",
 		 get_color (ctx, COLOR_BOLD),
 		 /* TRANSLATORS: Label for transaction success status */
@@ -1088,35 +1129,18 @@ pkgc_print_transaction (PkgcliContext *ctx, PkTransactionPast *transaction)
 		}
 	}
 
-	if (data && data[0] != '\0') {
-		lines = g_strsplit (data, "\n", -1);
-		lines_len = g_strv_length (lines);
-		if (lines_len > 0) {
-			g_print (" %s%s%s\n",
-				 get_color (ctx, COLOR_BOLD),
-				 /* TRANSLATORS: Label for affected packages in transaction */
-				 _("Affected packages:"), get_reset_color (ctx));
-			for (guint i = 0; i < lines_len; i++) {
-				g_autofree gchar *package = NULL;
-				g_auto(GStrv) parts = NULL;
-
-				if (lines[i] == NULL || lines[i][0] == '\0')
-					continue;
-
-				parts = g_strsplit (lines[i], "\t", 3);
-				if (parts[1] != NULL) {
-					package = pk_package_id_to_printable (parts[1]);
-					g_print ("   - %s %s\n", parts[0], package);
-				}
-			}
-		} else {
-			g_print ("  %s%s%s %s\n",
-				 get_color (ctx, COLOR_BOLD),
-				 /* TRANSLATORS: Label for affected packages in transaction */
-				 _("Affected packages:"),
-				   get_reset_color (ctx),
-				   /* TRANSLATORS: No packages were affected by the transaction */
-				   _("None"));
+	if (packages != NULL && packages->len > 0) {
+		g_print (" %s%s%s\n",
+			 get_color (ctx, COLOR_BOLD),
+			 /* TRANSLATORS: Label for affected packages in transaction */
+			 _("Affected packages:"), get_reset_color (ctx));
+		for (guint i = 0; i < packages->len; i++) {
+			PkPackage *pkg = g_ptr_array_index (packages, i);
+			g_autofree gchar *package = pk_package_id_to_printable (
+			    pk_package_get_id (pkg));
+			g_print ("   - %s %s\n",
+				 pk_info_enum_to_string (pk_package_get_info (pkg)),
+				 package);
 		}
 	}
 }
@@ -1172,7 +1196,7 @@ pkgc_resolve_package (PkgcliContext *ctx,
 	error_code = pk_results_get_error_code (results);
 	if (error_code != NULL) {
 		g_set_error_literal (error,
-				     G_IO_ERROR,
+				     PKGC_ERROR,
 				     pk_error_get_code (error_code),
 				     pk_error_get_details (error_code));
 		return NULL;
@@ -1182,7 +1206,7 @@ pkgc_resolve_package (PkgcliContext *ctx,
 	array = pk_results_get_package_array (results);
 	if (array->len == 0) {
 		g_set_error (error,
-			     G_IO_ERROR,
+			     PKGC_ERROR,
 			     PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
 			     "Could not find package: %s",
 			     package_name);
@@ -1198,7 +1222,7 @@ pkgc_resolve_package (PkgcliContext *ctx,
 	/* multiple matches - prompt user to choose */
 	if (ctx->noninteractive) {
 		g_set_error (error,
-			     G_IO_ERROR,
+			     PKGC_ERROR,
 			     PK_ERROR_ENUM_INTERNAL_ERROR,
 			     "Multiple packages match '%s' but running non-interactively",
 			     package_name);
@@ -1220,7 +1244,7 @@ pkgc_resolve_package (PkgcliContext *ctx,
 	g_print (_("Please choose the correct package: "));
 	if (scanf ("%u", &idx) != 1 || idx < 1 || idx > array->len) {
 		g_set_error_literal (error,
-				     G_IO_ERROR,
+				     PKGC_ERROR,
 				     PK_ERROR_ENUM_TRANSACTION_CANCELLED,
 				     "User aborted selection");
 		return NULL;

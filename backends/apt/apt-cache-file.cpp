@@ -252,35 +252,6 @@ bool AptCacheFile::isGarbage(const pkgCache::PkgIterator &pkg)
     return (*this)[pkg].Garbage;
 }
 
-bool AptCacheFile::doAutomaticRemove()
-{
-    pkgDepCache::ActionGroup group(*this);
-
-    // look over the cache to see what can be removed
-    for (pkgCache::PkgIterator Pkg = (*this)->PkgBegin(); !Pkg.end(); ++Pkg) {
-        if ((*this)[Pkg].Garbage) {
-            if (Pkg.CurrentVer() != 0 && Pkg->CurrentState != pkgCache::State::ConfigFiles) {
-                // TODO, packagekit could provide a way to purge
-                (*this)->MarkDelete(Pkg, false);
-            } else {
-                (*this)->MarkKeep(Pkg, false, false);
-            }
-        }
-    }
-
-    // Now see if we destroyed anything
-    if ((*this)->BrokenCount() != 0) {
-        g_warning(
-            "Seems like the AutoRemover destroyed something which really "
-            "shouldn't happen. Please file a bug report against APT.");
-        // TODO call show_broken
-        //       ShowBroken(c1out,cache,false);
-        return _error->Error("Internal Error, AutoRemover broke stuff");
-    }
-
-    return true;
-}
-
 bool AptCacheFile::isRemovingEssentialPackages()
 {
     std::string List;
@@ -345,26 +316,19 @@ PkgInfo AptCacheFile::resolvePkgID(const gchar *packageId)
     if (pkg.end() || (pkg.VersionList().end() && pkg.ProvidesList().end()))
         return PkgInfo(pkgCache::VerIterator());
 
-    // check if any intended action was encoded in this package-ID
-    auto piAction = PkgAction::NONE;
-    if (g_strcmp0(parts[PK_PACKAGE_ID_DATA], "+auto") == 0)
-        piAction = PkgAction::INSTALL_AUTO;
-    else if (g_strcmp0(parts[PK_PACKAGE_ID_DATA], "+manual") == 0)
-        piAction = PkgAction::INSTALL_MANUAL;
-
     const pkgCache::VerIterator &ver = findVer(pkg);
     // check to see if the provided package isn't virtual too
     if (!ver.end() && strcmp(ver.VerStr(), parts[PK_PACKAGE_ID_VERSION]) == 0)
-        return PkgInfo(ver, piAction);
+        return PkgInfo(ver);
 
     // check to see if the provided package isn't virtual too
     // also iterate through all available past versions
     for (auto candidateVer = findCandidateVer(pkg); !candidateVer.end(); candidateVer++) {
         if (strcmp(candidateVer.VerStr(), parts[PK_PACKAGE_ID_VERSION]) == 0)
-            return PkgInfo(candidateVer, piAction);
+            return PkgInfo(candidateVer);
     }
 
-    return PkgInfo(ver, piAction);
+    return PkgInfo(ver);
 }
 
 gchar *AptCacheFile::buildPackageId(const pkgCache::VerIterator &ver)
@@ -377,19 +341,13 @@ gchar *AptCacheFile::buildPackageId(const pkgCache::VerIterator &ver)
     const bool isAuto = (State.CandidateVer != 0) && (State.Flags & pkgCache::Flag::Auto);
 
     // when a package is installed manually, the data part of a package-id is "manual",
-    // otherwise it is "auto". Available (not installed) packages have no data, unless
-    // a pending installation is marked, in which case we prefix the desired new mode of
-    // the installed package (auto/manual) with a plus sign (+).
-    std::string data = "";
-    if (isInstalled) {
+    // otherwise it is "auto". Available (not installed) packages have no data.
+    const char *data = "";
+    if (isInstalled)
         data = isAuto ? "auto" : "manual";
-    } else {
-        if (State.NewInstall())
-            data = isAuto ? "+auto" : "+manual";
-    }
     const auto origin = utilBuildPackageOriginId(vf);
 
-    return pk_package_id_build(ver.ParentPkg().Name(), ver.VerStr(), ver.Arch(), origin.c_str(), data.c_str());
+    return pk_package_id_build(ver.ParentPkg().Name(), ver.VerStr(), ver.Arch(), origin.c_str(), data);
 }
 
 pkgCache::VerIterator AptCacheFile::findVer(const pkgCache::PkgIterator &pkg)
@@ -458,12 +416,7 @@ std::string AptCacheFile::getLongDescriptionParsed(const pkgCache::VerIterator &
     return debParser(getLongDescription(ver));
 }
 
-bool AptCacheFile::tryToInstall(
-    pkgProblemResolver &Fix,
-    const PkgInfo &pki,
-    bool autoInst,
-    bool preserveAuto,
-    bool fixBroken)
+bool AptCacheFile::tryToInstall(pkgProblemResolver &Fix, const PkgInfo &pki, bool autoInst, bool fixBroken)
 {
     // attempt to fix broken packages, if requested
     if (fixBroken) {
@@ -492,20 +445,23 @@ bool AptCacheFile::tryToInstall(
         return false;
     }
 
-    // Always install as "automatic" or "manual" if the package is explicitly set to
-    // either of the modes (because it may have been resolved in a previous transaction
-    // to be marked as automatic, for example in updates)
-    // If the package indicates no explicit preference we keep the current state
-    // unless the package should explicitly be marked as manually installed
-    // (via preserveAuto == false).
+    // The install mode decides whether APT treats this as a user request:
+    // MarkInstall(FromUser=true) clears the Auto flag, FromUser=false sets it
+    // on a new install. KeepCurrent therefore mirrors the flag the package has,
+    // and a package that is not installed yet has none, so it becomes manual.
     // See https://github.com/PackageKit/PackageKit/issues/450 for details.
-    bool fromUser = false;
-    if (pki.action == PkgAction::INSTALL_AUTO)
+    bool fromUser = true;
+    switch (pki.mode) {
+    case InstallMode::Auto:
         fromUser = false;
-    else if (pki.action == PkgAction::INSTALL_MANUAL)
+        break;
+    case InstallMode::Manual:
         fromUser = true;
-    else
-        fromUser = preserveAuto ? !(State.Flags & pkgCache::Flag::Auto) : true;
+        break;
+    case InstallMode::Keep:
+        fromUser = (Pkg->CurrentVer == 0) || !(State.Flags & pkgCache::Flag::Auto);
+        break;
+    }
 
     // FIXME: this is ignoring the return value. OTOH the return value means little to us
     //   since we run markinstall twice, once without autoinst and once with.
@@ -520,25 +476,20 @@ bool AptCacheFile::tryToInstall(
     return true;
 }
 
-void AptCacheFile::tryToRemove(pkgProblemResolver &Fix, const PkgInfo &pki)
+void AptCacheFile::tryToRemove(pkgProblemResolver &Fix, const PkgInfo &pki, bool purge)
 {
     pkgCache::PkgIterator Pkg = pki.ver.ParentPkg();
-
-    // The package is not installed
-    if (Pkg->CurrentVer == 0) {
-        Fix.Clear(Pkg);
-        Fix.Protect(Pkg);
-        Fix.Remove(Pkg);
-
-        return;
-    }
 
     Fix.Clear(Pkg);
     Fix.Protect(Pkg);
     Fix.Remove(Pkg);
-    // TODO this is false since PackageKit can't
-    // tell it want's o purge
-    GetDepCache()->MarkDelete(Pkg, false);
+
+    // The package is not installed: there is nothing to remove, unless only its
+    // configuration files are left and we were asked to purge those (like apt-get purge does)
+    if (Pkg->CurrentVer == 0 && !(purge && Pkg->CurrentState == pkgCache::State::ConfigFiles))
+        return;
+
+    GetDepCache()->MarkDelete(Pkg, purge);
 }
 
 std::string AptCacheFile::debParser(std::string descr)

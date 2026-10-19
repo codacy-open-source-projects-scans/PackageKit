@@ -56,7 +56,7 @@ PkBitfield
 pk_backend_get_roles(PkBackend *backend)
 {
 	return pk_bitfield_from_enums(
-		PK_ROLE_ENUM_DEPENDS_ON,
+		PK_ROLE_ENUM_GET_DEPENDENCIES,
 		PK_ROLE_ENUM_DOWNLOAD_PACKAGES,
 		PK_ROLE_ENUM_GET_DETAILS,
 		PK_ROLE_ENUM_GET_DETAILS_LOCAL,
@@ -73,7 +73,7 @@ pk_backend_get_roles(PkBackend *backend)
 		PK_ROLE_ENUM_REPO_ENABLE,
 		PK_ROLE_ENUM_REPO_REMOVE,
 		PK_ROLE_ENUM_REPO_SET_DATA,
-		PK_ROLE_ENUM_REQUIRED_BY,
+		PK_ROLE_ENUM_GET_DEPENDENTS,
 		PK_ROLE_ENUM_RESOLVE,
 		PK_ROLE_ENUM_REFRESH_CACHE,
 		PK_ROLE_ENUM_GET_UPDATES,
@@ -152,7 +152,7 @@ pk_backend_initialize(GKeyFile *conf, PkBackend *backend)
 	}
 
 	try {
-		dnf5_setup_base(priv, FALSE, FALSE, nullptr, pk_backend_is_online(backend));
+		dnf5_setup_base(priv);
 		g_signal_connect(backend, "updates-changed", G_CALLBACK(pk_backend_context_invalidate_cb), backend);
 	} catch (const std::exception &e) {
 		g_warning("Init failed: %s", e.what());
@@ -180,6 +180,23 @@ pk_backend_stop_job(PkBackend *backend, PkBackendJob *job)
 {
 }
 
+static void
+pk_backend_refresh_cache_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
+{
+	PkBackend *backend = (PkBackend *) pk_backend_job_get_backend(job);
+	PkBackendDnf5Private *priv = (PkBackendDnf5Private *) pk_backend_get_user_data(backend);
+	gboolean force = FALSE;
+	g_variant_get(params, "(b)", &force);
+
+	pk_backend_job_set_status(job, PK_STATUS_ENUM_REFRESH_CACHE);
+	g_autoptr(GMutexLocker) locker = g_mutex_locker_new(&priv->mutex);
+	try {
+		dnf5_refresh_cache(priv, job, force);
+	} catch (const std::exception &e) {
+		dnf5_job_error_from_exception(job, e, PK_ERROR_ENUM_INTERNAL_ERROR);
+	}
+}
+
 void
 pk_backend_run_job(PkBackend *backend, PkBackendJob *job)
 {
@@ -196,8 +213,8 @@ pk_backend_run_job(PkBackend *backend, PkBackendJob *job)
 	case PK_ROLE_ENUM_GET_REPO_LIST:
 	case PK_ROLE_ENUM_GET_UPDATES:
 	case PK_ROLE_ENUM_WHAT_PROVIDES:
-	case PK_ROLE_ENUM_DEPENDS_ON:
-	case PK_ROLE_ENUM_REQUIRED_BY:
+	case PK_ROLE_ENUM_GET_DEPENDENCIES:
+	case PK_ROLE_ENUM_GET_DEPENDENTS:
 	case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
 	case PK_ROLE_ENUM_DOWNLOAD_PACKAGES:
 	case PK_ROLE_ENUM_GET_DETAILS_LOCAL:
@@ -217,20 +234,9 @@ pk_backend_run_job(PkBackend *backend, PkBackendJob *job)
 	case PK_ROLE_ENUM_REPO_REMOVE:
 		pk_backend_job_thread_create(job, dnf5_repo_thread, NULL, NULL);
 		break;
-	case PK_ROLE_ENUM_REFRESH_CACHE: {
-		gboolean force;
-		g_variant_get(pk_backend_job_get_parameters(job), "(b)", &force);
-		pk_backend_job_set_status(job, PK_STATUS_ENUM_REFRESH_CACHE);
-		PkBackendDnf5Private *priv = (PkBackendDnf5Private *) pk_backend_get_user_data(backend);
-		g_autoptr(GMutexLocker) locker = g_mutex_locker_new(&priv->mutex);
-		try {
-			dnf5_refresh_cache(priv, force);
-		} catch (const std::exception &e) {
-			pk_backend_job_error_code(job, PK_ERROR_ENUM_INTERNAL_ERROR, "%s", e.what());
-		}
-		pk_backend_job_finished(job);
+	case PK_ROLE_ENUM_REFRESH_CACHE:
+		pk_backend_job_thread_create(job, pk_backend_refresh_cache_thread, NULL, NULL);
 		break;
-	}
 	default:
 		pk_backend_job_error_code(
 			job,

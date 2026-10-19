@@ -34,6 +34,7 @@
 #include <pk-package-ids.h>
 #include <pk-bitfield.h>
 #include <pk-update-detail.h>
+#include <pk-files.h>
 
 #include "pk-backend.h"
 #include "pk-backend-job.h"
@@ -71,7 +72,6 @@ void	     pk_backend_transaction_inhibit_start (PkBackend *backend);
 void	     pk_backend_transaction_inhibit_end (PkBackend *backend);
 gboolean     pk_backend_is_transaction_inhibited (PkBackend *backend);
 const gchar *pk_backend_bool_to_string (gboolean value);
-gboolean     pk_backend_is_online (PkBackend *backend);
 gchar	    *pk_backend_convert_uri (const gchar *proxy);
 gchar	    *pk_backend_convert_uri_socks (const gchar *proxy);
 
@@ -92,6 +92,7 @@ PkBitfield   pk_backend_get_filters (PkBackend *backend);
 PkBitfield   pk_backend_get_roles (PkBackend *backend);
 gchar	   **pk_backend_get_mime_types (PkBackend *backend);
 gboolean     pk_backend_supports_parallelization (PkBackend *backend);
+gboolean     pk_backend_supports_frontend_socket (PkBackend *backend);
 void	     pk_backend_initialize (GKeyFile  *conf,
 				    PkBackend *backend);
 void	     pk_backend_destroy (PkBackend *backend);
@@ -107,30 +108,30 @@ void	     pk_backend_download_packages (PkBackend	*backend,
 					   PkBackendJob *job,
 					   gchar       **package_ids,
 					   const gchar	*directory);
-void	     pk_backend_depends_on (PkBackend	 *backend,
-				    PkBackendJob *job,
-				    PkBitfield	  filters,
-				    gchar	**package_ids,
-				    gboolean	  recursive);
+void	     pk_backend_get_dependencies (PkBackend    *backend,
+					  PkBackendJob *job,
+					  PkBitfield	filters,
+					  gchar	      **package_ids,
+					  gboolean	recursive);
 void	     pk_backend_get_details (PkBackend	  *backend,
 				     PkBackendJob *job,
 				     gchar	 **package_ids);
 void	     pk_backend_get_details_local (PkBackend	*backend,
 					   PkBackendJob *job,
-					   gchar       **files);
+					   GUnixFDList	*fds);
 void	     pk_backend_get_files_local (PkBackend    *backend,
 					 PkBackendJob *job,
-					 gchar	     **files);
+					 GUnixFDList  *fds);
 void	     pk_backend_get_distro_upgrades (PkBackend	  *backend,
 					     PkBackendJob *job);
 void	     pk_backend_get_files (PkBackend	*backend,
 				   PkBackendJob *job,
 				   gchar       **package_ids);
-void	     pk_backend_required_by (PkBackend	  *backend,
-				     PkBackendJob *job,
-				     PkBitfield	   filters,
-				     gchar	 **package_ids,
-				     gboolean	   recursive);
+void	     pk_backend_get_dependents (PkBackend    *backend,
+					PkBackendJob *job,
+					PkBitfield    filters,
+					gchar	    **package_ids,
+					gboolean      recursive);
 void	     pk_backend_get_update_detail (PkBackend	*backend,
 					   PkBackendJob *job,
 					   gchar       **package_ids);
@@ -149,7 +150,7 @@ void	     pk_backend_install_signature (PkBackend	*backend,
 void	     pk_backend_install_files (PkBackend    *backend,
 				       PkBackendJob *job,
 				       PkBitfield    transaction_flags,
-				       gchar	   **full_paths);
+				       GUnixFDList  *fds);
 void	     pk_backend_refresh_cache (PkBackend    *backend,
 				       PkBackendJob *job,
 				       gboolean	     force);

@@ -1092,7 +1092,6 @@ class PackageKitPortageBackend(PackageKitPortageMixin, pkb.Backend):
     )
     filters = (pkb.FILTER_INSTALLED, pkb.FILTER_FREE, pkb.FILTER_NEWEST, pkb.FILTER_APPLICATION)
     # These filters are candidates for further add:
-    # pkb.FILTER_GUI (need new PROPERTIES entry)
     # pkb.FILTER_ARCH (need some work, see ML)
     # pkb.FILTER_SOURCE (need some work/support, see ML)
     groups = (
@@ -1181,7 +1180,7 @@ class PackageKitPortageBackend(PackageKitPortageMixin, pkb.Backend):
 
         self._selected_build_id = prev_bid
 
-    def depends_on(self, filters, pkgs, recursive):
+    def get_dependencies(self, filters, pkgs, recursive):
         # TODO: use only myparams ?
         # TODO: improve error management / info
 
@@ -1367,7 +1366,7 @@ class PackageKitPortageBackend(PackageKitPortageMixin, pkb.Backend):
                     continue
                 self.repo_detail(repo_name, repo_name, enabled)
 
-    def required_by(self, filters, pkgs, recursive):
+    def get_dependents(self, filters, pkgs, recursive):
         # TODO: manage non-installed package
 
         # FILTERS:
@@ -1385,7 +1384,7 @@ class PackageKitPortageBackend(PackageKitPortageMixin, pkb.Backend):
         if pkb.FILTER_NOT_INSTALLED in filters:
             self.error(
                 pkb.ERROR_CANNOT_GET_REQUIRES,
-                "required-by returns only installed packages" " at the moment",
+                "get-dependents returns only installed packages" " at the moment",
             )
             return
 
@@ -1398,7 +1397,7 @@ class PackageKitPortageBackend(PackageKitPortageMixin, pkb.Backend):
             if not self._is_installed(cpv):
                 self.error(
                     pkb.ERROR_CANNOT_GET_REQUIRES,
-                    "required-by is only available for installed" " packages at the moment",
+                    "get-dependents is only available for installed" " packages at the moment",
                 )
                 continue
 
@@ -1439,13 +1438,9 @@ class PackageKitPortageBackend(PackageKitPortageMixin, pkb.Backend):
             for cpv in self.pvar.vardb.match(portage.versions.pkgsplit(cpv)[0]):
                 updates.append(cpv)
 
-            # temporarily set vendor_url = homepage
-            homepage = self._get_metadata(cpv, ["HOMEPAGE"])[0]
-
             self.update_detail(
                 pkg,
                 updates=updates,
-                vendor_urls=[homepage] if homepage else [],
                 update_text="No update text",
                 changelog="No ChangeLog",
                 state=pkb.UPDATE_STATE_STABLE,

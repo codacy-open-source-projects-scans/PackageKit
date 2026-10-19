@@ -1,6 +1,7 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
  * Copyright (C) 2008-2014 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2024-2026 Matthias Klumpp <matthias@tenstral.net>
  *
  * Licensed under the GNU Lesser General Public License Version 2.1
  *
@@ -33,14 +34,18 @@
 
 #include <gio/gio.h>
 #include <glib-object.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <gio/gunixfdlist.h>
 #include <locale.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "pk-client.h"
-#include "pk-client-helper.h"
+#include "pk-client-helper-private.h"
 #include "pk-common.h"
+#include "pk-common-private.h"
 #include "pk-control.h"
-#include "pk-debug.h"
 #include "pk-enum.h"
 #include "pk-package-id.h"
 #include "pk-package-ids.h"
@@ -63,7 +68,6 @@ struct _PkClientPrivate
 	gchar *locale;
 	gboolean background;
 	gboolean interactive;
-	gboolean details_with_deps_size;
 	guint cache_age;
 };
 
@@ -74,9 +78,15 @@ enum {
 	PROP_INTERACTIVE,
 	PROP_IDLE,
 	PROP_CACHE_AGE,
-	PROP_DETAILS_WITH_DEPS_SIZE,
 	PROP_LAST
 };
+
+enum {
+	SIGNAL_FRONTEND_SOCKET,
+	SIGNAL_LAST
+};
+
+static guint signals[SIGNAL_LAST] = { 0 };
 
 static GParamSpec *obj_properties[PROP_LAST] = {
 	NULL,
@@ -488,9 +498,6 @@ pk_client_get_property (GObject *object, guint prop_id, GValue *value, GParamSpe
 	case PROP_CACHE_AGE:
 		g_value_set_uint (value, priv->cache_age);
 		break;
-	case PROP_DETAILS_WITH_DEPS_SIZE:
-		g_value_set_boolean (value, priv->details_with_deps_size);
-		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 		break;
@@ -519,9 +526,6 @@ pk_client_set_property (GObject *object, guint prop_id, const GValue *value, GPa
 		break;
 	case PROP_CACHE_AGE:
 		priv->cache_age = g_value_get_uint (value);
-		break;
-	case PROP_DETAILS_WITH_DEPS_SIZE:
-		priv->details_with_deps_size = g_value_get_boolean (value);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -661,56 +665,6 @@ pk_client_convert_real_paths (gchar **paths, GError **error)
 		}
 	}
 	return g_strdupv (res);
-}
-
-/*
- * pk_client_get_user_temp:
- *
- * Return (and create if does not exist) a temporary directory
- * that is writable only by the user, and readable by root.
- *
- * Return value: the temp directory, or %NULL for create error
- **/
-static gchar *
-pk_client_get_user_temp (const gchar *subfolder, GError **error)
-{
-	gchar *path = NULL;
-	g_autoptr(GFile) file = NULL;
-
-	/* build path in home folder */
-	path = g_build_filename (g_get_user_cache_dir (), "PackageKit", subfolder, NULL);
-
-	/* find if exists */
-	file = g_file_new_for_path (path);
-	if (g_file_query_exists (file, NULL))
-		return path;
-
-	/* create as does not exist */
-	if (!g_file_make_directory_with_parents (file, NULL, error)) {
-		/* return nothing.. */
-		g_free (path);
-		return NULL;
-	}
-	return path;
-}
-
-/*
- * pk_client_is_file_native:
- **/
-static gboolean
-pk_client_is_file_native (const gchar *filename)
-{
-	g_autoptr(GFile) source = NULL;
-
-	/* does gvfs think the file is on a remote filesystem? */
-	source = g_file_new_for_path (filename);
-	if (!g_file_is_native (source))
-		return FALSE;
-
-	/* are we FUSE mounted */
-	if (g_strstr_len (filename, -1, "/.gvfs/") != NULL)
-		return FALSE;
-	return TRUE;
 }
 
 /*
@@ -946,13 +900,13 @@ pk_client_copy_finished_remove_old_files (PkClientState *state)
 	/* remove any not in the destination directory */
 	for (i = 0; i < array->len;) {
 		PkFiles *item;
-		gchar **files;
+		GPtrArray *files;
 		g_autoptr(GFile) file = NULL;
 		g_autoptr(GFile) parent = NULL;
 
 		item = g_ptr_array_index (array, i);
 		files = pk_files_get_files (item);
-		file = g_file_new_for_path (files[0]);
+		file = g_file_new_for_path (pk_file_get_path (g_ptr_array_index (files, 0)));
 		parent = g_file_get_parent (file);
 		if (parent == NULL || !g_file_equal (parent, directory))
 			g_ptr_array_remove_index_fast (array, i);
@@ -1024,7 +978,7 @@ pk_client_copy_downloaded_file (PkClientState *state,
 	g_autoptr(GFile) destination = NULL;
 	g_autoptr(GFile) source = NULL;
 	g_autoptr(PkFiles) item = NULL;
-	g_auto(GStrv) files = NULL;
+	g_autoptr(GPtrArray) files = NULL;
 
 	/* generate the destination location */
 	basename = g_path_get_basename (source_file);
@@ -1053,8 +1007,9 @@ pk_client_copy_downloaded_file (PkClientState *state,
 			   (GAsyncReadyCallback) pk_client_copy_downloaded_finished_cb,
 			   g_object_ref (state));
 
-	/* Add the result (as a GStrv) to the results set */
-	files = g_strsplit (path, ",", -1);
+	/* add the result to the results set */
+	files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+	g_ptr_array_add (files, pk_file_new (path, PK_FILE_KIND_ENUM_REGULAR));
 	item = pk_files_new ();
 	g_object_set (item,
 		      "package-id",
@@ -1081,8 +1036,6 @@ pk_client_copy_downloaded_file (PkClientState *state,
 static void
 pk_client_copy_downloaded (PkClientState *state)
 {
-	guint i;
-	guint j;
 	guint len;
 	PkFiles *item;
 	g_autoptr(GPtrArray) array = NULL;
@@ -1093,9 +1046,9 @@ pk_client_copy_downloaded (PkClientState *state)
 
 	/* get the number of files to copy */
 	n_files_to_copy = 0;
-	for (i = 0; i < array->len; i++) {
+	for (guint i = 0; i < array->len; i++) {
 		item = g_ptr_array_index (array, i);
-		n_files_to_copy += g_strv_length (pk_files_get_files (item));
+		n_files_to_copy += pk_files_get_files (item)->len;
 	}
 
 	g_atomic_int_set (&state->remaining_files_to_copy, n_files_to_copy);
@@ -1107,18 +1060,19 @@ pk_client_copy_downloaded (PkClientState *state)
 	pk_progress_set_percentage (state->progress, -1);
 
 	/* do the copies pipelined */
-	for (i = 0; i < len; i++) {
-		gchar **files;
+	for (guint i = 0; i < len; i++) {
+		GPtrArray *files;
 		item = g_ptr_array_index (array, i);
 		files = pk_files_get_files (item);
-		for (j = 0; files[j] != NULL; j++) {
-			pk_client_copy_downloaded_file (state,
-							pk_files_get_package_id (item),
-							files[j]);
+		for (guint j = 0; j < files->len; j++) {
+			pk_client_copy_downloaded_file (
+			    state,
+			    pk_files_get_package_id (item),
+			    pk_file_get_path (g_ptr_array_index (files, j)));
 		}
 	}
 
-	/* Were there actually any files to copy? */
+	/* were there actually any files to copy? */
 	if (n_files_to_copy == 0) {
 		state->ret = TRUE;
 		pk_client_state_finish (state, NULL);
@@ -1172,6 +1126,73 @@ pk_client_signal_finished (PkClientState *state, PkExitEnum exit_enum, guint run
 	pk_client_state_finish (state, NULL);
 }
 
+/**
+ * pk_client_issues_from_variant:
+ *
+ * Parse the `issues` value of an update detail (an `aa{sv}`)
+ */
+static GPtrArray *
+pk_client_issues_from_variant (GVariant *variant)
+{
+	GPtrArray *issues = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_issue_free);
+	GVariantIter iter;
+	GVariant *child;
+
+	g_variant_iter_init (&iter, variant);
+	while ((child = g_variant_iter_next_value (&iter)) != NULL) {
+		guint kind = PK_ISSUE_KIND_ENUM_UNKNOWN;
+		const gchar *url = NULL;
+		const gchar *id = NULL;
+		const gchar *title = NULL;
+
+		g_variant_lookup (child, "kind", "u", &kind);
+		g_variant_lookup (child, "url", "&s", &url);
+		g_variant_lookup (child, "id", "&s", &id);
+		g_variant_lookup (child, "title", "&s", &title);
+		if (kind >= PK_ISSUE_KIND_ENUM_LAST)
+			kind = PK_ISSUE_KIND_ENUM_UNKNOWN;
+		if (url != NULL)
+			g_ptr_array_add (issues, pk_issue_new (kind, url, id, title));
+		g_variant_unref (child);
+	}
+
+	return issues;
+}
+
+/*
+ * pk_client_packages_from_variant:
+ * @variant: the `packages` value of a past transaction, as `a(uss)`
+ *
+ * Returns: (element-type PkPackage) (transfer full): the packages
+ */
+static GPtrArray *
+pk_client_packages_from_variant (GVariant *variant)
+{
+	GPtrArray *packages = g_ptr_array_new_with_free_func (g_object_unref);
+	g_autoptr(GVariantIter) iter = NULL;
+	guint info;
+	const gchar *package_id;
+	const gchar *summary;
+
+	if (!g_variant_is_of_type (variant, G_VARIANT_TYPE ("a(uss)")))
+		return packages;
+	g_variant_get (variant, "a(uss)", &iter);
+	while (g_variant_iter_loop (iter, "(u&s&s)", &info, &package_id, &summary)) {
+		g_autoptr(PkPackage) package = pk_package_new ();
+		if (!pk_package_set_id (package, package_id, NULL))
+			continue;
+		pk_package_set_info (package, info);
+		pk_package_set_summary (package, summary);
+		g_ptr_array_add (packages, g_steal_pointer (&package));
+	}
+	return packages;
+}
+
+/**
+ * results_add_update_detail_from_variant:
+ *
+ * Parse one `(sa{sv})` element of the UpdateDetails signal.
+ */
 static void
 results_add_update_detail_from_variant (PkResults *results,
 					GVariant *update_variant,
@@ -1179,61 +1200,45 @@ results_add_update_detail_from_variant (PkResults *results,
 					const gchar *transaction_id)
 {
 	g_autoptr(PkUpdateDetail) item = NULL;
+	g_autoptr(GVariantIter) dict = NULL;
 	const gchar *package_id;
-	g_autofree gchar **updates_strv = NULL;
-	g_autofree gchar **obsoletes_strv = NULL;
-	g_autofree gchar **vendor_urls_strv = NULL;
-	g_autofree gchar **bugzilla_urls_strv = NULL;
-	g_autofree gchar **cve_urls_strv = NULL;
-	guint restart, state;
-	const gchar *update_text, *changelog, *issued, *updated;
+	const gchar *key;
+	GVariant *value;
 
-	g_variant_get (update_variant,
-		       "(&s^a&s^a&s^a&s^a&s^a&su&s&su&s&s)",
-		       &package_id,
-		       &updates_strv,
-		       &obsoletes_strv,
-		       &vendor_urls_strv,
-		       &bugzilla_urls_strv,
-		       &cve_urls_strv,
-		       &restart,
-		       &update_text,
-		       &changelog,
-		       &state,
-		       &issued,
-		       &updated);
-
+	g_variant_get (update_variant, "(&sa{sv})", &package_id, &dict);
 	item = pk_update_detail_new ();
 	g_object_set (item,
 		      "package-id",
 		      package_id,
-		      "updates",
-		      updates_strv[0] != NULL ? updates_strv : NULL,
-		      "obsoletes",
-		      obsoletes_strv[0] != NULL ? obsoletes_strv : NULL,
-		      "vendor-urls",
-		      vendor_urls_strv[0] != NULL ? vendor_urls_strv : NULL,
-		      "bugzilla-urls",
-		      bugzilla_urls_strv[0] != NULL ? bugzilla_urls_strv : NULL,
-		      "cve-urls",
-		      cve_urls_strv[0] != NULL ? cve_urls_strv : NULL,
-		      "restart",
-		      restart,
-		      "update-text",
-		      update_text,
-		      "changelog",
-		      changelog,
-		      "state",
-		      state,
-		      "issued",
-		      issued,
-		      "updated",
-		      updated,
 		      "role",
 		      role,
 		      "transaction-id",
 		      transaction_id,
 		      NULL);
+
+	while (g_variant_iter_loop (dict, "{&sv}", &key, &value)) {
+		if (g_strcmp0 (key, "updates") == 0 || g_strcmp0 (key, "obsoletes") == 0) {
+			g_autofree const gchar **strv = g_variant_get_strv (value, NULL);
+			g_object_set (item, key, strv, NULL);
+		} else if (g_strcmp0 (key, "issues") == 0) {
+			g_autoptr(GPtrArray) issues = pk_client_issues_from_variant (value);
+			g_object_set (item, "issues", issues, NULL);
+		} else if (g_strcmp0 (key, "restart") == 0) {
+			guint restart = g_variant_get_uint32 (value);
+			if (restart >= PK_RESTART_ENUM_LAST)
+				restart = PK_RESTART_ENUM_UNKNOWN;
+			g_object_set (item, "restart", restart, NULL);
+		} else if (g_strcmp0 (key, "state") == 0) {
+			guint state = g_variant_get_uint32 (value);
+			if (state >= PK_UPDATE_STATE_ENUM_LAST)
+				state = PK_UPDATE_STATE_ENUM_UNKNOWN;
+			g_object_set (item, "state", state, NULL);
+		} else if (g_strcmp0 (key, "update-text") == 0 ||
+			   g_strcmp0 (key, "changelog") == 0 ||
+			   g_strcmp0 (key, "time-issued") == 0) {
+			g_object_set (item, key, g_variant_get_string (value, NULL), NULL);
+		}
+	}
 
 	pk_results_add_update_detail (results, item);
 }
@@ -1254,7 +1259,6 @@ pk_client_signal_cb (GDBusProxy *proxy,
 	gboolean tmp_bool;
 	guint tmp_uint;
 	guint tmp_uint2;
-	guint tmp_uint3;
 
 	if (!state)
 		return;
@@ -1305,11 +1309,17 @@ pk_client_signal_cb (GDBusProxy *proxy,
 						      "download-size",
 						      g_variant_get_uint64 (value),
 						      NULL);
-				else
+				else if (g_strcmp0 (key, "package-id") == 0 ||
+					 g_strcmp0 (key, "summary") == 0 ||
+					 g_strcmp0 (key, "description") == 0 ||
+					 g_strcmp0 (key, "url") == 0 ||
+					 g_strcmp0 (key, "license") == 0)
 					g_object_set (item,
 						      key,
 						      g_variant_get_string (value, NULL),
 						      NULL);
+				else
+					g_debug ("ignoring unknown Details key '%s'", key);
 			}
 			g_variant_iter_free (dictionary);
 		} else {
@@ -1348,7 +1358,7 @@ pk_client_signal_cb (GDBusProxy *proxy,
 		g_autoptr(GVariantIter) iter = NULL;
 		g_autoptr(GVariant) update_detail = NULL;
 
-		g_variant_get (parameters, "(a(sasasasasasussuss))", &iter);
+		g_variant_get (parameters, "(a(sa{sv}))", &iter);
 
 		while ((update_detail = g_variant_iter_next_value (iter))) {
 			results_add_update_detail_from_variant (state->results,
@@ -1360,42 +1370,52 @@ pk_client_signal_cb (GDBusProxy *proxy,
 
 		return;
 	}
-	if (g_strcmp0 (signal_name, "Transaction") == 0) {
-		g_autoptr(PkTransactionPast) item = NULL;
-		g_variant_get (parameters,
-			       "(&o&sbuu&su&s)",
-			       &tmp_str[0],
-			       &tmp_str[1],
-			       &tmp_bool,
-			       &tmp_uint3,
-			       &tmp_uint,
-			       &tmp_str[3],
-			       &tmp_uint2,
-			       &tmp_str[4]);
-		item = pk_transaction_past_new ();
-		g_object_set (item,
-			      "tid",
-			      tmp_str[0],
-			      "timespec",
-			      tmp_str[1],
-			      "succeeded",
-			      tmp_bool,
-			      "role",
-			      tmp_uint3,
-			      "duration",
-			      tmp_uint,
-			      "data",
-			      tmp_str[3],
-			      "uid",
-			      tmp_uint2,
-			      "cmdline",
-			      tmp_str[4],
-			      "PkSource::role",
-			      state->role,
-			      "transaction-id",
-			      state->transaction_id,
-			      NULL);
-		pk_results_add_transaction (state->results, item);
+	if (g_strcmp0 (signal_name, "History") == 0) {
+		GVariantIter *iter;
+		GVariantIter *dict;
+		const gchar *tid;
+		const gchar *key;
+		GVariant *value;
+
+		g_variant_get (parameters, "(a(oa{sv}))", &iter);
+		while (g_variant_iter_loop (iter, "(&oa{sv})", &tid, &dict)) {
+			g_autoptr(PkHistoryItem) item = pk_history_item_new ();
+			g_object_set (item,
+				      "tid",
+				      tid,
+				      "PkSource::role",
+				      state->role,
+				      "transaction-id",
+				      state->transaction_id,
+				      NULL);
+			while (g_variant_iter_loop (dict, "{&sv}", &key, &value)) {
+				if (g_strcmp0 (key, "time-started") == 0 ||
+				    g_strcmp0 (key, "cmdline") == 0) {
+					g_object_set (item,
+						      key,
+						      g_variant_get_string (value, NULL),
+						      NULL);
+				} else if (g_strcmp0 (key, "succeeded") == 0) {
+					g_object_set (item,
+						      key,
+						      g_variant_get_boolean (value),
+						      NULL);
+				} else if (g_strcmp0 (key, "role") == 0 ||
+					   g_strcmp0 (key, "duration") == 0 ||
+					   g_strcmp0 (key, "uid") == 0) {
+					g_object_set (item,
+						      key,
+						      g_variant_get_uint32 (value),
+						      NULL);
+				} else if (g_strcmp0 (key, "packages") == 0) {
+					g_autoptr(GPtrArray) packages = NULL;
+					packages = pk_client_packages_from_variant (value);
+					g_object_set (item, "packages", packages, NULL);
+				}
+			}
+			pk_results_add_history_item (state->results, item);
+		}
+		g_variant_iter_free (iter);
 		return;
 	}
 	if (g_strcmp0 (signal_name, "DistroUpgrade") == 0) {
@@ -1435,9 +1455,15 @@ pk_client_signal_cb (GDBusProxy *proxy,
 		return;
 	}
 	if (g_strcmp0 (signal_name, "Files") == 0) {
-		g_autofree gchar **files = NULL;
+		g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func (
+		    (GDestroyNotify) pk_file_free);
+		g_autoptr(GVariantIter) iter = NULL;
 		g_autoptr(PkFiles) item = NULL;
-		g_variant_get (parameters, "(&s^a&s)", &tmp_str[0], &files);
+		const gchar *path;
+		guint32 kind;
+		g_variant_get (parameters, "(&sa(su))", &tmp_str[0], &iter);
+		while (g_variant_iter_next (iter, "(&su)", &path, &kind))
+			g_ptr_array_add (files, pk_file_new (path, kind));
 		item = pk_files_new ();
 		g_object_set (item,
 			      "package-id",
@@ -1667,6 +1693,38 @@ pk_client_method_cb (GObject *source_object, GAsyncResult *res, gpointer user_da
 }
 
 /*
+ * pk_client_open_files:
+ *
+ * The daemon takes package files as fds, so it never has to resolve a path
+ * as root that the caller may not be allowed to read.
+ */
+static GUnixFDList *
+pk_client_open_files (gchar **files, GError **error)
+{
+	g_autoptr(GUnixFDList) fd_list = g_unix_fd_list_new ();
+
+	for (guint i = 0; files[i] != NULL; i++) {
+		gint fd = open (files[i], O_RDONLY | O_CLOEXEC);
+		gint ret;
+
+		if (fd < 0) {
+			g_set_error (error,
+				     PK_CLIENT_ERROR,
+				     PK_CLIENT_ERROR_INVALID_INPUT,
+				     "could not open %s: %s",
+				     files[i],
+				     g_strerror (errno));
+			return NULL;
+		}
+		ret = g_unix_fd_list_append (fd_list, fd, error);
+		close (fd);
+		if (ret < 0)
+			return NULL;
+	}
+	return g_steal_pointer (&fd_list);
+}
+
+/*
  * pk_client_set_role:
  **/
 static void
@@ -1674,6 +1732,20 @@ pk_client_set_role (PkClientState *state, PkRoleEnum role)
 {
 	pk_progress_set_transaction_flags (state->progress, state->transaction_flags);
 	pk_progress_set_role (state->progress, role);
+}
+
+static void pk_client_call_role_method (PkClientState *state);
+static void
+pk_client_frontend_socket_cb (GObject *source_object, GAsyncResult *res, gpointer user_data);
+static gboolean pk_client_frontend_wanted (PkClientState *state);
+static void
+pk_client_start_frontend_helper (PkClientState *state, GUnixFDList *fds, GVariant *value);
+
+static gboolean
+pk_client_role_needs_frontend (PkRoleEnum role)
+{
+	return role == PK_ROLE_ENUM_INSTALL_FILES || role == PK_ROLE_ENUM_INSTALL_PACKAGES ||
+	       role == PK_ROLE_ENUM_REMOVE_PACKAGES || role == PK_ROLE_ENUM_UPDATE_PACKAGES;
 }
 
 /*
@@ -1684,6 +1756,7 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 {
 	GDBusProxy *proxy = G_DBUS_PROXY (source_object);
 	g_autoptr(PkClientState) state = PK_CLIENT_STATE (g_steal_pointer (&user_data));
+	PkClientPrivate *priv = GET_PRIVATE(state->client);
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GVariant) value = NULL;
 
@@ -1705,6 +1778,70 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 	}
 
 	g_assert (!pk_client_state_is_finished (state));
+
+	/* the backend may need a session helper to ask the user questions */
+	if (pk_client_role_needs_frontend (state->role) && priv->interactive &&
+	    !pk_bitfield_contain (state->transaction_flags, PK_TRANSACTION_FLAG_ENUM_SIMULATE) &&
+	    !pk_bitfield_contain (state->transaction_flags,
+				  PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD) &&
+	    pk_client_frontend_wanted (state)) {
+		g_dbus_proxy_call_with_unix_fd_list (state->proxy,
+						     "GetFrontendSocket",
+						     NULL,
+						     G_DBUS_CALL_FLAGS_NONE,
+						     PK_CLIENT_DBUS_METHOD_TIMEOUT,
+						     NULL,
+						     state->cancellable,
+						     pk_client_frontend_socket_cb,
+						     g_object_ref (state));
+		return;
+	}
+	pk_client_call_role_method (state);
+}
+
+/*
+ * pk_client_frontend_socket_cb:
+ **/
+static void
+pk_client_frontend_socket_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
+{
+	GDBusProxy *proxy = G_DBUS_PROXY (source_object);
+	g_autoptr(PkClientState) state = PK_CLIENT_STATE (g_steal_pointer (&user_data));
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GVariant) value = NULL;
+	g_autoptr(GUnixFDList) fds = NULL;
+
+	/* a transaction without a helper still works, questions just use defaults */
+	value = g_dbus_proxy_call_with_unix_fd_list_finish (proxy, &fds, res, &error);
+	if (value == NULL) {
+		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+			pk_client_state_finish (state, g_steal_pointer (&error));
+			return;
+		}
+		pk_client_fixup_dbus_error (error);
+		if (g_error_matches (error, PK_CLIENT_ERROR, PK_CLIENT_ERROR_NOT_SUPPORTED))
+			g_debug ("backend does not use a frontend socket");
+		else
+			g_warning ("failed to get frontend socket: %s", error->message);
+		g_clear_error (&error);
+	} else {
+		pk_client_start_frontend_helper (state, fds, value);
+	}
+
+	if (g_cancellable_set_error_if_cancelled (state->cancellable_client, &error)) {
+		pk_client_state_finish (state, g_steal_pointer (&error));
+		return;
+	}
+	pk_client_call_role_method (state);
+}
+
+/*
+ * pk_client_call_role_method:
+ **/
+static void
+pk_client_call_role_method (PkClientState *state)
+{
+	g_autoptr(GError) error = NULL;
 
 	/* we'll have results from now on */
 	state->results = pk_results_new ();
@@ -1775,24 +1912,38 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 				   g_object_ref (state));
 		g_object_set (state->results, "inputs", g_strv_length (state->package_ids), NULL);
 	} else if (state->role == PK_ROLE_ENUM_GET_DETAILS_LOCAL) {
-		g_dbus_proxy_call (state->proxy,
-				   "GetDetailsLocal",
-				   g_variant_new ("(^a&s)", state->files),
-				   G_DBUS_CALL_FLAGS_NONE,
-				   PK_CLIENT_DBUS_METHOD_TIMEOUT,
-				   state->cancellable,
-				   pk_client_method_cb,
-				   g_object_ref (state));
+		g_autoptr(GUnixFDList) fd_list = pk_client_open_files (state->files, &error);
+		if (fd_list == NULL) {
+			pk_client_state_finish (state, g_steal_pointer (&error));
+			return;
+		}
+		g_dbus_proxy_call_with_unix_fd_list (
+		    state->proxy,
+		    "GetDetailsLocal",
+		    g_variant_new ("(@ah)", pk_unix_fd_list_get_handles (fd_list)),
+		    G_DBUS_CALL_FLAGS_NONE,
+		    PK_CLIENT_DBUS_METHOD_TIMEOUT,
+		    fd_list,
+		    state->cancellable,
+		    pk_client_method_cb,
+		    g_object_ref (state));
 		g_object_set (state->results, "inputs", g_strv_length (state->files), NULL);
 	} else if (state->role == PK_ROLE_ENUM_GET_FILES_LOCAL) {
-		g_dbus_proxy_call (state->proxy,
-				   "GetFilesLocal",
-				   g_variant_new ("(^a&s)", state->files),
-				   G_DBUS_CALL_FLAGS_NONE,
-				   PK_CLIENT_DBUS_METHOD_TIMEOUT,
-				   state->cancellable,
-				   pk_client_method_cb,
-				   g_object_ref (state));
+		g_autoptr(GUnixFDList) fd_list = pk_client_open_files (state->files, &error);
+		if (fd_list == NULL) {
+			pk_client_state_finish (state, g_steal_pointer (&error));
+			return;
+		}
+		g_dbus_proxy_call_with_unix_fd_list (
+		    state->proxy,
+		    "GetFilesLocal",
+		    g_variant_new ("(@ah)", pk_unix_fd_list_get_handles (fd_list)),
+		    G_DBUS_CALL_FLAGS_NONE,
+		    PK_CLIENT_DBUS_METHOD_TIMEOUT,
+		    fd_list,
+		    state->cancellable,
+		    pk_client_method_cb,
+		    g_object_ref (state));
 		g_object_set (state->results, "inputs", g_strv_length (state->files), NULL);
 	} else if (state->role == PK_ROLE_ENUM_GET_UPDATE_DETAIL) {
 		g_dbus_proxy_call (state->proxy,
@@ -1804,15 +1955,16 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 				   pk_client_method_cb,
 				   g_object_ref (state));
 		g_object_set (state->results, "inputs", g_strv_length (state->package_ids), NULL);
-	} else if (state->role == PK_ROLE_ENUM_GET_OLD_TRANSACTIONS) {
-		g_dbus_proxy_call (state->proxy,
-				   "GetOldTransactions",
-				   g_variant_new ("(u)", state->number),
-				   G_DBUS_CALL_FLAGS_NONE,
-				   PK_CLIENT_DBUS_METHOD_TIMEOUT,
-				   state->cancellable,
-				   pk_client_method_cb,
-				   g_object_ref (state));
+	} else if (state->role == PK_ROLE_ENUM_GET_HISTORY) {
+		g_dbus_proxy_call (
+		    state->proxy,
+		    "GetHistory",
+		    g_variant_new ("(tu^a&s)", state->filters, state->number, state->search),
+		    G_DBUS_CALL_FLAGS_NONE,
+		    PK_CLIENT_DBUS_METHOD_TIMEOUT,
+		    state->cancellable,
+		    pk_client_method_cb,
+		    g_object_ref (state));
 	} else if (state->role == PK_ROLE_ENUM_DOWNLOAD_PACKAGES) {
 		g_dbus_proxy_call (
 		    state->proxy,
@@ -1833,9 +1985,9 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 				   state->cancellable,
 				   pk_client_method_cb,
 				   g_object_ref (state));
-	} else if (state->role == PK_ROLE_ENUM_DEPENDS_ON) {
+	} else if (state->role == PK_ROLE_ENUM_GET_DEPENDENCIES) {
 		g_dbus_proxy_call (state->proxy,
-				   "DependsOn",
+				   "GetDependencies",
 				   g_variant_new ("(t^a&sb)",
 						  state->filters,
 						  state->package_ids,
@@ -1847,9 +1999,9 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 				   g_object_ref (state));
 		g_object_set (state->results, "inputs", g_strv_length (state->package_ids), NULL);
 
-	} else if (state->role == PK_ROLE_ENUM_REQUIRED_BY) {
+	} else if (state->role == PK_ROLE_ENUM_GET_DEPENDENTS) {
 		g_dbus_proxy_call (state->proxy,
-				   "RequiredBy",
+				   "GetDependents",
 				   g_variant_new ("(t^a&sb)",
 						  state->filters,
 						  state->package_ids,
@@ -1953,12 +2105,20 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 		    g_object_ref (state));
 		g_object_set (state->results, "inputs", g_strv_length (state->package_ids), NULL);
 	} else if (state->role == PK_ROLE_ENUM_INSTALL_FILES) {
-		g_dbus_proxy_call (
+		g_autoptr(GUnixFDList) fd_list = pk_client_open_files (state->files, &error);
+		if (fd_list == NULL) {
+			pk_client_state_finish (state, g_steal_pointer (&error));
+			return;
+		}
+		g_dbus_proxy_call_with_unix_fd_list (
 		    state->proxy,
 		    "InstallFiles",
-		    g_variant_new ("(t^a&s)", state->transaction_flags, state->files),
+		    g_variant_new ("(t@ah)",
+				   state->transaction_flags,
+				   pk_unix_fd_list_get_handles (fd_list)),
 		    G_DBUS_CALL_FLAGS_NONE,
 		    PK_CLIENT_DBUS_METHOD_TIMEOUT,
+		    fd_list,
 		    state->cancellable,
 		    pk_client_method_cb,
 		    g_object_ref (state));
@@ -2041,187 +2201,61 @@ pk_client_set_hints_cb (GObject *source_object, GAsyncResult *res, gpointer user
 }
 
 /*
- * pk_client_bool_to_string:
- **/
-static const gchar *
-pk_client_bool_to_string (gboolean value)
-{
-	if (value)
-		return "true";
-	return "false";
-}
-
-/*
- * pk_client_create_helper_argv_envp_test:
+ * pk_client_frontend_wanted:
+ *
+ * Whether the application or a frontend of the session can answer questions.
  **/
 static gboolean
-pk_client_create_helper_argv_envp_test (PkClientState *state, gchar ***argv, gchar ***envp)
+pk_client_frontend_wanted (PkClientState *state)
 {
-	const gchar *datadir;
-	g_autofree gchar *helper = NULL;
-
-	/* the test data directory is provided at runtime by the test harness */
-	datadir = g_getenv ("PK_TEST_DATA_DIR");
-	if (datadir == NULL)
-		return FALSE;
-
-	/* check we have the right file */
-	helper = g_build_filename (datadir, "pk-client-helper-test.py", NULL);
-	if (!g_file_test (helper, G_FILE_TEST_EXISTS)) {
-		g_warning ("could not find the socket helper!");
-		return FALSE;
-	}
-
-	/* setup simple test socket */
-	*argv = g_new0 (gchar *, 2);
-	(*argv)[0] = g_steal_pointer (&helper);
-	return TRUE;
-}
-
-/*
- * pk_client_create_helper_argv_envp:
- **/
-gboolean
-pk_client_create_helper_argv_envp (gchar ***argv, gchar ***envp_out)
-{
-	const gchar *dialog = NULL;
-	const gchar *display;
-	const gchar *wayland_display;
-	const gchar *xauthority;
-	const gchar *term;
-	const gchar *desktop;
-	const gchar *lang;
-	const gchar *language;
-	gboolean ret;
-	guint envpi = 0;
-	gchar **envp;
-
-	/* check we have the right file */
-	ret = g_file_test ("/usr/bin/debconf-communicate", G_FILE_TEST_EXISTS);
-	if (!ret)
-		return FALSE;
-
-	/* setup simple test socket */
-	*argv = g_new0 (gchar *, 2);
-	*argv[0] = g_strdup ("/usr/bin/debconf-communicate");
-
-	*envp_out = g_new0 (gchar *, 16);
-	envp = *envp_out;
-	envp[envpi++] = g_strdup ("DEBCONF_DB_REPLACE=configdb");
-	envp[envpi++] = g_strdup ("DEBCONF_DB_OVERRIDE=Pipe{infd:none outfd:none}");
-	if (pk_debug_is_verbose ())
-		envp[envpi++] = g_strdup ("DEBCONF_DEBUG=.");
-
-	/* do we have an available terminal to use */
-	term = g_getenv ("TERM");
-	if (term != NULL) {
-		envp[envpi++] = g_strdup_printf ("TERM=%s", term);
-		dialog = "dialog";
-	}
-
-	/* do we have access to the display */
-	display = g_getenv ("DISPLAY");
-	if (display != NULL) {
-		envp[envpi++] = g_strdup_printf ("DISPLAY=%s", display);
-	}
-	xauthority = g_getenv ("XAUTHORITY");
-	if (xauthority != NULL) {
-		envp[envpi++] = g_strdup_printf ("XAUTHORITY=%s", xauthority);
-	}
-	wayland_display = g_getenv ("WAYLAND_DISPLAY");
-	if (wayland_display != NULL) {
-		envp[envpi++] = g_strdup_printf ("WAYLAND_DISPLAY=%s", wayland_display);
-		envp[envpi++] = g_strdup_printf ("XDG_RUNTIME_DIR=%s", g_get_user_runtime_dir ());
-	}
-
-	desktop = g_getenv ("XDG_SESSION_DESKTOP");
-	if (display != NULL || wayland_display != NULL) {
-		if (g_strcmp0 (desktop, "KDE") == 0 ||
-		    g_strcmp0 (g_getenv ("KDE_FULL_SESSION"), "true") == 0)
-			dialog = "kde";
-		else
-			dialog = "gnome";
-	}
-
-	if (desktop != NULL)
-		envp[envpi++] = g_strdup_printf ("XDG_SESSION_DESKTOP=%s", desktop);
-
-	/* some Qt-based helpers need a config directory */
-	envp[envpi++] = g_strdup_printf ("XDG_CONFIG_HOME=%s/config", g_get_user_runtime_dir ());
-
-	/* forward locale */
-	lang = g_getenv ("LANG");
-	if (lang != NULL)
-		envp[envpi++] = g_strdup_printf ("LANG=%s", lang);
-	language = g_getenv ("LANGUAGE");
-	;
-	if (language != NULL)
-		envp[envpi++] = g_strdup_printf ("LANGUAGE=%s", language);
-
-	/* indicate a prefered frontend */
-	if (dialog != NULL) {
-		envp[envpi++] = g_strdup_printf ("DEBIAN_FRONTEND=%s", dialog);
-		g_debug ("using frontend %s", dialog);
-	}
-	return TRUE;
-}
-
-/*
- * pk_client_create_helper_socket:
- **/
-static gchar *
-pk_client_create_helper_socket (PkClientState *state)
-{
-	gboolean ret = FALSE;
-	g_autoptr(GError) error = NULL;
-	g_autofree gchar *socket_filename = NULL;
-	g_autofree gchar *socket_id = NULL;
 	g_auto(GStrv) argv = NULL;
 	g_auto(GStrv) envp = NULL;
 
-	/* use the test socket */
-	if (g_getenv ("PK_SELF_TEST") != NULL) {
-		ret = pk_client_create_helper_argv_envp_test (state, &argv, &envp);
+	if (PK_CLIENT_GET_CLASS (state->client)->frontend_socket != NULL ||
+	    g_signal_has_handler_pending (state->client, signals[SIGNAL_FRONTEND_SOCKET], 0, TRUE))
+		return TRUE;
+	return pk_client_helper_create_argv_envp (&argv, &envp);
+}
+
+/*
+ * pk_client_start_frontend_helper:
+ *
+ * Gets the questions on the socket the daemon returned from
+ * GetFrontendSocket answered, by the application if it wants to.
+ **/
+static void
+pk_client_start_frontend_helper (PkClientState *state, GUnixFDList *fds, GVariant *value)
+{
+	gint handle;
+	gint fd;
+	gboolean handled = FALSE;
+	g_autoptr(GSocket) socket = NULL;
+	g_autoptr(GError) error = NULL;
+
+	g_variant_get (value, "(h)", &handle);
+	fd = fds != NULL ? g_unix_fd_list_get (fds, handle, &error) : -1;
+	if (fd < 0) {
+		g_warning ("no frontend socket received: %s",
+			   error != NULL ? error->message : "no fds");
+		return;
+	}
+	socket = g_socket_new_from_fd (fd, &error);
+	if (socket == NULL) {
+		g_warning ("invalid frontend socket: %s", error->message);
+		close (fd);
+		return;
 	}
 
-	/* either the self test failed, or we're not in self test */
-	if (!ret) {
-		ret = pk_client_create_helper_argv_envp (&argv, &envp);
-	}
+	g_signal_emit (state->client, signals[SIGNAL_FRONTEND_SOCKET], 0, socket, &handled);
+	if (handled)
+		return;
 
-	/* no supported frontends available */
-	if (!ret)
-		return NULL;
-
-	/* This is not a specially handled debian frontend (current terminal or
-	 * the debconf-kde stuff, use a systemd-activated helper if available)
-	 */
-	if (envp != NULL && !g_strv_contains ((const gchar *const *) envp, "DEBIAN_FRONTEND=kde") &&
-	    !g_strv_contains ((const gchar *const *) envp, "DEBIAN_FRONTEND=dialog")) {
-		g_autofree gchar *existing_socket_filename = g_build_filename (
-		    g_get_user_runtime_dir (),
-		    "pk-debconf-socket",
-		    NULL);
-		if (g_file_test (existing_socket_filename, G_FILE_TEST_EXISTS))
-			return g_strdup_printf ("frontend-socket=%s", existing_socket_filename);
-	}
-
-	/* create object */
 	state->client_helper = pk_client_helper_new ();
-
-	/* create socket to read from /tmp */
-	socket_id = g_strdup_printf ("gpk-%s.socket", strrchr (state->tid, '/') + 1);
-	socket_filename = g_build_filename (g_get_tmp_dir (), socket_id, NULL);
-
-	/* start the helper process */
-	ret = pk_client_helper_start (state->client_helper, socket_filename, argv, envp, &error);
-	if (!ret) {
-		g_warning ("failed to open debconf socket: %s", error->message);
-		return NULL;
+	if (!pk_client_helper_start (state->client_helper, socket, NULL, NULL, &error)) {
+		g_warning ("failed to start frontend helper: %s", error->message);
+		/* nobody answers, so the backend must not wait for it */
+		g_socket_shutdown (socket, TRUE, TRUE, NULL);
 	}
-
-	/* success */
-	return g_strdup_printf ("frontend-socket=%s", socket_filename);
 }
 
 /*
@@ -2230,10 +2264,9 @@ pk_client_create_helper_socket (PkClientState *state)
 static void
 pk_client_get_proxy_cb (GObject *object, GAsyncResult *res, gpointer user_data)
 {
-	gchar *hint;
 	g_autoptr(PkClientState) state = PK_CLIENT_STATE (g_steal_pointer (&user_data));
 	g_autoptr(GError) error = NULL;
-	g_autoptr(GPtrArray) array = NULL;
+	g_auto(GVariantBuilder) hints = G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE ("a{sv}"));
 	PkClientPrivate *priv = pk_client_get_instance_private (state->client);
 
 	state->proxy = g_dbus_proxy_new_for_bus_finish (res, &error);
@@ -2257,46 +2290,29 @@ pk_client_get_proxy_cb (GObject *object, GAsyncResult *res, gpointer user_data)
 	pk_client_proxy_connect (state);
 
 	/* get hints */
-	array = g_ptr_array_new_with_free_func (g_free);
-
-	/* locale */
-	if (priv->locale != NULL) {
-		hint = g_strdup_printf ("locale=%s", priv->locale);
-		g_ptr_array_add (array, hint);
-	}
-
-	/* background */
-	hint = g_strdup_printf ("background=%s", pk_client_bool_to_string (priv->background));
-	g_ptr_array_add (array, hint);
-
-	/* interactive */
-	hint = g_strdup_printf ("interactive=%s", pk_client_bool_to_string (priv->interactive));
-	g_ptr_array_add (array, hint);
-
-	if (priv->details_with_deps_size && state->role == PK_ROLE_ENUM_GET_DETAILS)
-		g_ptr_array_add (array, g_strdup ("details-with-deps-size=true"));
-
-	/* cache-age */
-	if (priv->cache_age > 0) {
-		hint = g_strdup_printf ("cache-age=%u", priv->cache_age);
-		g_ptr_array_add (array, hint);
-	}
-
-	/* create socket for roles that need interaction */
-	if (state->role == PK_ROLE_ENUM_INSTALL_FILES ||
-	    state->role == PK_ROLE_ENUM_INSTALL_PACKAGES ||
-	    state->role == PK_ROLE_ENUM_REMOVE_PACKAGES ||
-	    state->role == PK_ROLE_ENUM_UPDATE_PACKAGES) {
-		hint = pk_client_create_helper_socket (state);
-		if (hint != NULL)
-			g_ptr_array_add (array, hint);
-	}
+	if (priv->locale != NULL)
+		g_variant_builder_add (&hints,
+				       "{sv}",
+				       "locale",
+				       g_variant_new_string (priv->locale));
+	g_variant_builder_add (&hints,
+			       "{sv}",
+			       "background",
+			       g_variant_new_boolean (priv->background));
+	g_variant_builder_add (&hints,
+			       "{sv}",
+			       "interactive",
+			       g_variant_new_boolean (priv->interactive));
+	if (priv->cache_age > 0)
+		g_variant_builder_add (&hints,
+				       "{sv}",
+				       "cache-age",
+				       g_variant_new_uint32 (priv->cache_age));
 
 	/* set hints */
-	g_ptr_array_add (array, NULL);
 	g_dbus_proxy_call (state->proxy,
 			   "SetHints",
-			   g_variant_new ("(^a&s)", array->pdata),
+			   g_variant_new ("(a{sv})", &hints),
 			   G_DBUS_CALL_FLAGS_NONE,
 			   PK_CLIENT_DBUS_METHOD_TIMEOUT,
 			   state->cancellable,
@@ -2369,7 +2385,7 @@ pk_client_generic_finish (PkClient *client, GAsyncResult *res, GError **error)
 /**
  * pk_client_resolve_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @packages: (array zero-terminated=1): an array of package names to resolve, e.g. "gnome-system-tools"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
@@ -2431,7 +2447,7 @@ pk_client_resolve_async (PkClient *client,
 /**
  * pk_client_search_names_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): free text to search for, for instance, "power"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
@@ -2492,7 +2508,7 @@ pk_client_search_names_async (PkClient *client,
 /**
  * pk_client_search_details_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): free text to search for, for instance, "power"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
@@ -2554,7 +2570,7 @@ pk_client_search_details_async (PkClient *client,
 /**
  * pk_client_search_groups_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): a group enum to search for, for instance, "system-tools"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
@@ -2614,7 +2630,7 @@ pk_client_search_groups_async (PkClient *client,
 /**
  * pk_client_search_files_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): file to search for, for instance, "/sbin/service"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
@@ -3035,27 +3051,34 @@ pk_client_get_updates_async (PkClient *client,
 }
 
 /**
- * pk_client_get_old_transactions_async: (finish-func pk_client_generic_finish):
+ * pk_client_get_history_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @number: the number of past transactions to return, or 0 for all
+ * @flags: a #PkBitfield of #PkHistoryFlagEnum values, e.g. %PK_HISTORY_FLAG_ENUM_SUCCEEDED
+ * @count: the maximum number of history items to return, or 0 for all
+ * @names: (array zero-terminated=1) (nullable): only return packages with these names, or %NULL for all
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
  * @progress_user_data: data to pass to @progress_callback
  * @callback_ready: the function to run on completion
  * @user_data: the data to pass to @callback_ready
  *
- * Get the old transaction list, mainly used for the transaction viewer.
+ * Get the transaction history, newest first.
  *
- * Since: 0.5.2
+ * If @names is set, each history item only contains the packages with one
+ * of these names, and items without any of them are skipped.
+ *
+ * Since: 2.0.0
  **/
 void
-pk_client_get_old_transactions_async (PkClient *client,
-				      guint number,
-				      GCancellable *cancellable,
-				      PkProgressCallback progress_callback,
-				      gpointer progress_user_data,
-				      GAsyncReadyCallback callback_ready,
-				      gpointer user_data)
+pk_client_get_history_async (PkClient *client,
+			     PkBitfield flags,
+			     guint count,
+			     gchar **names,
+			     GCancellable *cancellable,
+			     PkProgressCallback progress_callback,
+			     gpointer progress_user_data,
+			     GAsyncReadyCallback callback_ready,
+			     gpointer user_data)
 {
 	PkClientPrivate *priv = GET_PRIVATE(client);
 	g_autoptr(PkClientState) state = NULL;
@@ -3069,10 +3092,12 @@ pk_client_get_old_transactions_async (PkClient *client,
 	state = pk_client_state_new (client,
 				     callback_ready,
 				     user_data,
-				     pk_client_get_old_transactions_async,
-				     PK_ROLE_ENUM_GET_OLD_TRANSACTIONS,
+				     pk_client_get_history_async,
+				     PK_ROLE_ENUM_GET_HISTORY,
 				     cancellable);
-	state->number = number;
+	state->filters = flags;
+	state->number = count;
+	state->search = names != NULL ? g_strdupv (names) : g_new0 (gchar *, 1);
 	state->progress = pk_progress_new_with_callback (progress_callback, progress_user_data);
 
 	/* check not already cancelled */
@@ -3092,9 +3117,9 @@ pk_client_get_old_transactions_async (PkClient *client,
 }
 
 /**
- * pk_client_depends_on_async: (finish-func pk_client_generic_finish):
+ * pk_client_get_dependencies_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @package_ids: (array zero-terminated=1): a null terminated array of package_id structures such as "hal;0.0.1;i386;fedora;"
  * @recursive: If we should search recursively for depends
  * @cancellable: a #GCancellable or %NULL
@@ -3108,15 +3133,15 @@ pk_client_get_old_transactions_async (PkClient *client,
  * Since: 0.5.2
  **/
 void
-pk_client_depends_on_async (PkClient *client,
-			    PkBitfield filters,
-			    gchar **package_ids,
-			    gboolean recursive,
-			    GCancellable *cancellable,
-			    PkProgressCallback progress_callback,
-			    gpointer progress_user_data,
-			    GAsyncReadyCallback callback_ready,
-			    gpointer user_data)
+pk_client_get_dependencies_async (PkClient *client,
+				  PkBitfield filters,
+				  gchar **package_ids,
+				  gboolean recursive,
+				  GCancellable *cancellable,
+				  PkProgressCallback progress_callback,
+				  gpointer progress_user_data,
+				  GAsyncReadyCallback callback_ready,
+				  gpointer user_data)
 {
 	PkClientPrivate *priv = GET_PRIVATE(client);
 	g_autoptr(PkClientState) state = NULL;
@@ -3131,8 +3156,8 @@ pk_client_depends_on_async (PkClient *client,
 	state = pk_client_state_new (client,
 				     callback_ready,
 				     user_data,
-				     pk_client_depends_on_async,
-				     PK_ROLE_ENUM_DEPENDS_ON,
+				     pk_client_get_dependencies_async,
+				     PK_ROLE_ENUM_GET_DEPENDENCIES,
 				     cancellable);
 	state->filters = filters;
 	state->recursive = recursive;
@@ -3158,7 +3183,7 @@ pk_client_depends_on_async (PkClient *client,
 /**
  * pk_client_get_packages_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
  * @progress_user_data: data to pass to @progress_callback
@@ -3213,9 +3238,9 @@ pk_client_get_packages_async (PkClient *client,
 }
 
 /**
- * pk_client_required_by_async: (finish-func pk_client_generic_finish):
+ * pk_client_get_dependents_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @package_ids: (array zero-terminated=1): a null terminated array of package_id structures such as "hal;0.0.1;i386;fedora;"
  * @recursive: If we should search recursively for requires
  * @cancellable: a #GCancellable or %NULL
@@ -3229,15 +3254,15 @@ pk_client_get_packages_async (PkClient *client,
  * Since: 0.5.2
  **/
 void
-pk_client_required_by_async (PkClient *client,
-			     PkBitfield filters,
-			     gchar **package_ids,
-			     gboolean recursive,
-			     GCancellable *cancellable,
-			     PkProgressCallback progress_callback,
-			     gpointer progress_user_data,
-			     GAsyncReadyCallback callback_ready,
-			     gpointer user_data)
+pk_client_get_dependents_async (PkClient *client,
+				PkBitfield filters,
+				gchar **package_ids,
+				gboolean recursive,
+				GCancellable *cancellable,
+				PkProgressCallback progress_callback,
+				gpointer progress_user_data,
+				GAsyncReadyCallback callback_ready,
+				gpointer user_data)
 {
 	PkClientPrivate *priv = GET_PRIVATE(client);
 	g_autoptr(PkClientState) state = NULL;
@@ -3252,8 +3277,8 @@ pk_client_required_by_async (PkClient *client,
 	state = pk_client_state_new (client,
 				     callback_ready,
 				     user_data,
-				     pk_client_required_by_async,
-				     PK_ROLE_ENUM_REQUIRED_BY,
+				     pk_client_get_dependents_async,
+				     PK_ROLE_ENUM_GET_DEPENDENTS,
 				     cancellable);
 	state->recursive = recursive;
 	state->filters = filters;
@@ -3279,7 +3304,7 @@ pk_client_required_by_async (PkClient *client,
 /**
  * pk_client_what_provides_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): a search term such as "sound/mp3"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope notified): the function to run when the progress changes
@@ -3765,84 +3790,6 @@ pk_client_update_packages_async (PkClient *client,
 				  g_steal_pointer (&state));
 }
 
-/*
- * pk_client_copy_native_finished_cb:
- */
-static void
-pk_client_copy_native_finished_cb (GFile *file, GAsyncResult *res, gpointer user_data)
-{
-	g_autoptr(PkClientState) state = PK_CLIENT_STATE (g_steal_pointer (&user_data));
-	g_autoptr(GError) error = NULL;
-
-	/* get the result */
-	if (!g_file_copy_finish (file, res, &error)) {
-		pk_client_state_finish (state, g_steal_pointer (&error));
-		return;
-	}
-
-	/* no more copies pending? */
-	if (g_atomic_int_dec_and_test (&state->remaining_files_to_copy)) {
-		PkClientPrivate *client_priv = pk_client_get_instance_private (state->client);
-		/* now get tid and continue on our merry way */
-		pk_control_get_tid_async (client_priv->control,
-					  state->cancellable,
-					  (GAsyncReadyCallback) pk_client_get_tid_cb,
-					  g_object_ref (state));
-	}
-}
-
-/*
- * pk_client_copy_non_native_then_get_tid:
- **/
-static void
-pk_client_copy_non_native_then_get_tid (PkClientState *state)
-{
-	gchar *path;
-	gboolean ret;
-	guint i;
-	g_autofree gchar *user_temp = NULL;
-	g_autoptr(GError) error = NULL;
-
-	/* get a temp dir accessible by the daemon */
-	user_temp = pk_client_get_user_temp ("native-cache", &error);
-	g_debug ("using temp dir %s", user_temp);
-
-	/* save percentage */
-	ret = pk_progress_set_percentage (state->progress, -1);
-
-	/* copy each file that is non-native */
-	for (i = 0; state->files[i] != NULL; i++) {
-		ret = pk_client_is_file_native (state->files[i]);
-		g_debug ("%s native=%i", state->files[i], ret);
-		if (!ret) {
-			/* generate the destination location */
-			g_autofree gchar *basename = NULL;
-			g_autoptr(GFile) destination = NULL;
-			g_autoptr(GFile) source = NULL;
-			basename = g_path_get_basename (state->files[i]);
-			path = g_build_filename (user_temp, basename, NULL);
-			g_debug ("copy from %s to %s", state->files[i], path);
-			source = g_file_new_for_path (state->files[i]);
-			destination = g_file_new_for_path (path);
-
-			/* copy the file async */
-			g_file_copy_async (source,
-					   destination,
-					   G_FILE_COPY_OVERWRITE,
-					   G_PRIORITY_DEFAULT,
-					   state->cancellable,
-					   (GFileProgressCallback) pk_client_copy_progress_cb,
-					   state,
-					   (GAsyncReadyCallback) pk_client_copy_native_finished_cb,
-					   g_object_ref (state));
-
-			/* pass the new path to PackageKit */
-			g_free (state->files[i]);
-			state->files[i] = path;
-		}
-	}
-}
-
 /**
  * pk_client_install_files_async: (finish-func pk_client_generic_finish):
  * @client: a valid #PkClient instance
@@ -3871,8 +3818,6 @@ pk_client_install_files_async (PkClient *client,
 {
 	PkClientPrivate *priv = GET_PRIVATE(client);
 	g_autoptr(PkClientState) state = NULL;
-	gboolean ret;
-	guint i;
 	g_autoptr(GError) error = NULL;
 
 	g_return_if_fail (PK_IS_CLIENT (client));
@@ -3906,26 +3851,11 @@ pk_client_install_files_async (PkClient *client,
 		return;
 	}
 
-	/* how many non-native */
-	for (i = 0; state->files[i] != NULL; i++) {
-		ret = pk_client_is_file_native (state->files[i]);
-		/* on a FUSE mount (probably created by gvfs) and not readable by packagekitd */
-		if (!ret)
-			g_atomic_int_inc (&state->remaining_files_to_copy);
-	}
-
-	/* nothing to copy, common case */
-	if (g_atomic_int_get (&state->remaining_files_to_copy) == 0) {
-		/* just get tid */
-		pk_control_get_tid_async (priv->control,
-					  cancellable,
-					  (GAsyncReadyCallback) pk_client_get_tid_cb,
-					  g_object_ref (state));
-		return;
-	}
-
-	/* copy the files first */
-	pk_client_copy_non_native_then_get_tid (state);
+	/* get tid */
+	pk_control_get_tid_async (priv->control,
+				  cancellable,
+				  (GAsyncReadyCallback) pk_client_get_tid_cb,
+				  g_steal_pointer (&state));
 }
 
 /**
@@ -4773,51 +4703,6 @@ pk_client_get_cache_age (PkClient *client)
 	return priv->cache_age;
 }
 
-/**
- * pk_client_set_details_with_deps_size:
- * @client: a valid #PkClient instance
- * @details_with_deps_size: the value to set
- *
- * Sets whether the pk_client_get_details_async() should include dependencies
- * download sizes for packages, which are not installed.
- *
- * Since: 1.2.7
- **/
-void
-pk_client_set_details_with_deps_size (PkClient *client, gboolean details_with_deps_size)
-{
-	PkClientPrivate *priv = GET_PRIVATE(client);
-
-	g_return_if_fail (PK_IS_CLIENT (client));
-
-	if (priv->details_with_deps_size == details_with_deps_size)
-		return;
-
-	priv->details_with_deps_size = details_with_deps_size;
-	g_object_notify_by_pspec (G_OBJECT (client), obj_properties[PROP_DETAILS_WITH_DEPS_SIZE]);
-}
-
-/**
- * pk_client_get_details_with_deps_size:
- * @client: a valid #PkClient instance
- *
- * Gets the client details-with-deps-size value.
- *
- * Returns: whether the pk_client_get_details_async() should include dependencies
- *    download sizes for packages, which are not installed.
- *
- * Since: 1.2.7
- **/
-gboolean
-pk_client_get_details_with_deps_size (PkClient *client)
-{
-	PkClientPrivate *priv = GET_PRIVATE(client);
-
-	g_return_val_if_fail (PK_IS_CLIENT (client), FALSE);
-
-	return priv->details_with_deps_size;
-}
-
 /*
  * pk_client_class_init:
  **/
@@ -4897,19 +4782,39 @@ pk_client_class_init (PkClientClass *klass)
 							    G_PARAM_READWRITE |
 								G_PARAM_STATIC_STRINGS);
 
-	/**
-	 * PkClient:details-with-deps-size:
-	 *
-	 * Since: 1.2.7
-	 */
-	obj_properties[PROP_DETAILS_WITH_DEPS_SIZE] = g_param_spec_boolean (
-	    "details-with-deps-size",
-	    NULL,
-	    NULL,
-	    FALSE,
-	    G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
-
 	g_object_class_install_properties (object_class, PROP_LAST, obj_properties);
+
+	/**
+	 * PkClient::frontend-socket:
+	 * @client: the #PkClient
+	 * @socket: a listening Unix stream socket
+	 *
+	 * Emitted when the daemon offers a socket on which the backend asks the
+	 * user questions during an interactive transaction, e.g. debconf
+	 * questions of maintainer scripts. Each connection is one question
+	 * session in the debconf passthrough protocol.
+	 *
+	 * A handler that returns %TRUE takes over @socket and answers the
+	 * questions itself, or shuts it down with g_socket_shutdown() to leave
+	 * them unanswered; only closing it makes the backend wait. Otherwise
+	 * they are answered by the session's agent if one is running, or by a
+	 * frontend program spawned for each connection.
+	 *
+	 * Returns: %TRUE if the handler took over the socket
+	 *
+	 * Since: 2.0.0
+	 */
+	signals[SIGNAL_FRONTEND_SOCKET] = g_signal_new (
+	    "frontend-socket",
+	    G_TYPE_FROM_CLASS (object_class),
+	    G_SIGNAL_RUN_LAST,
+	    G_STRUCT_OFFSET (PkClientClass, frontend_socket),
+	    g_signal_accumulator_true_handled,
+	    NULL,
+	    NULL,
+	    G_TYPE_BOOLEAN,
+	    1,
+	    G_TYPE_SOCKET);
 }
 
 /*
@@ -4925,7 +4830,6 @@ pk_client_init (PkClient *client)
 	priv->background = FALSE;
 	priv->interactive = TRUE;
 	priv->cache_age = G_MAXUINT;
-	priv->details_with_deps_size = FALSE;
 
 	/* use a control object */
 	priv->control = pk_control_new ();

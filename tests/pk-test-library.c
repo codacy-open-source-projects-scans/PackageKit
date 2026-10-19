@@ -25,7 +25,7 @@
 #include <glib/gstdio.h>
 #include <gio/gunixsocketaddress.h>
 
-#include "pk-client-helper.h"
+#include "pk-client-helper-private.h"
 #include "pk-common.h"
 #include "pk-control.h"
 #include "pk-debug.h"
@@ -72,9 +72,9 @@ pk_test_bitfield_func (void)
 
 	/* check we can convert filter bitfield to text (plural) */
 	text = pk_filter_bitfield_to_string (pk_bitfield_value (PK_FILTER_ENUM_NOT_DEVELOPMENT) |
-					     pk_bitfield_value (PK_FILTER_ENUM_GUI) |
+					     pk_bitfield_value (PK_FILTER_ENUM_APPLICATION) |
 					     pk_bitfield_value (PK_FILTER_ENUM_NEWEST));
-	g_assert_cmpstr (text, ==, "~devel;gui;newest");
+	g_assert_cmpstr (text, ==, "newest;~devel;application");
 	g_free (text);
 
 	/* check we can convert filter text to bitfield (none) */
@@ -86,25 +86,27 @@ pk_test_bitfield_func (void)
 	g_assert_cmpint (filter, ==, pk_bitfield_value (PK_FILTER_ENUM_NOT_DEVELOPMENT));
 
 	/* check we can convert filter text to bitfield (plural) */
-	filter = pk_filter_bitfield_from_string ("~devel;gui;newest");
+	filter = pk_filter_bitfield_from_string ("newest;~devel;application");
 	g_assert_cmpint (filter,
 			 ==,
 			 (pk_bitfield_value (PK_FILTER_ENUM_NOT_DEVELOPMENT) |
-			  pk_bitfield_value (PK_FILTER_ENUM_GUI) |
+			  pk_bitfield_value (PK_FILTER_ENUM_APPLICATION) |
 			  pk_bitfield_value (PK_FILTER_ENUM_NEWEST)));
 
 	/* check we can add / remove bitfield */
 	filter = pk_bitfield_value (PK_FILTER_ENUM_NOT_DEVELOPMENT) |
-		 pk_bitfield_value (PK_FILTER_ENUM_GUI) | pk_bitfield_value (PK_FILTER_ENUM_NEWEST);
+		 pk_bitfield_value (PK_FILTER_ENUM_APPLICATION) |
+		 pk_bitfield_value (PK_FILTER_ENUM_NEWEST);
 	pk_bitfield_add (filter, PK_FILTER_ENUM_NOT_FREE);
 	pk_bitfield_remove (filter, PK_FILTER_ENUM_NOT_DEVELOPMENT);
 	text = pk_filter_bitfield_to_string (filter);
-	g_assert_cmpstr (text, ==, "gui;~free;newest");
+	g_assert_cmpstr (text, ==, "newest;application;~free");
 	g_free (text);
 
 	/* check we can test enum presence */
 	filter = pk_bitfield_value (PK_FILTER_ENUM_NOT_DEVELOPMENT) |
-		 pk_bitfield_value (PK_FILTER_ENUM_GUI) | pk_bitfield_value (PK_FILTER_ENUM_NEWEST);
+		 pk_bitfield_value (PK_FILTER_ENUM_APPLICATION) |
+		 pk_bitfield_value (PK_FILTER_ENUM_NEWEST);
 	g_assert_true (pk_bitfield_contain (filter, PK_FILTER_ENUM_NOT_DEVELOPMENT));
 
 	/* check we can test enum false-presence */
@@ -215,11 +217,24 @@ pk_test_common_func (void)
 }
 
 static void
+pk_test_file_func (void)
+{
+	g_autoptr(PkFile) dir = pk_file_new_from_disk ("/");
+	g_autoptr(PkFile) missing = pk_file_new_from_disk ("/does/not/exist");
+	g_autoptr(PkFile) given = pk_file_new ("/x", PK_FILE_KIND_ENUM_SYMLINK);
+	g_autoptr(PkFile) copy = pk_file_copy (given);
+
+	g_assert_cmpint (pk_file_get_kind (dir), ==, PK_FILE_KIND_ENUM_DIRECTORY);
+	g_assert_cmpint (pk_file_get_kind (missing), ==, PK_FILE_KIND_ENUM_UNKNOWN);
+	g_assert_cmpstr (pk_file_get_path (copy), ==, "/x");
+	g_assert_cmpint (pk_file_get_kind (copy), ==, PK_FILE_KIND_ENUM_SYMLINK);
+}
+
+static void
 pk_test_enum_func (void)
 {
 	const gchar *string;
 	PkRoleEnum role_value;
-	guint i;
 
 	/* find value */
 	role_value = pk_role_enum_from_string ("search-file");
@@ -230,7 +245,7 @@ pk_test_enum_func (void)
 	g_assert_cmpstr (string, ==, "search-file");
 
 	/* check we convert all the role bitfield */
-	for (i = 1; i < PK_ROLE_ENUM_LAST; i++) {
+	for (guint i = 1; i < PK_ROLE_ENUM_LAST; i++) {
 		string = pk_role_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -240,7 +255,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the status bitfield */
-	for (i = 1; i < PK_STATUS_ENUM_LAST; i++) {
+	for (guint i = 1; i < PK_STATUS_ENUM_LAST; i++) {
 		string = pk_status_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -250,7 +265,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the exit bitfield */
-	for (i = 0; i < PK_EXIT_ENUM_LAST; i++) {
+	for (guint i = 0; i < PK_EXIT_ENUM_LAST; i++) {
 		string = pk_exit_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -260,7 +275,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the filter bitfield */
-	for (i = 0; i < PK_FILTER_ENUM_LAST; i++) {
+	for (guint i = 0; i < PK_FILTER_ENUM_LAST; i++) {
 		string = pk_filter_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -270,7 +285,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the restart bitfield */
-	for (i = 0; i < PK_RESTART_ENUM_LAST; i++) {
+	for (guint i = 0; i < PK_RESTART_ENUM_LAST; i++) {
 		string = pk_restart_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -280,7 +295,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the error_code bitfield */
-	for (i = 0; i < PK_ERROR_ENUM_LAST; i++) {
+	for (guint i = 0; i < PK_ERROR_ENUM_LAST; i++) {
 		string = pk_error_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -290,7 +305,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the group bitfield */
-	for (i = 1; i < PK_GROUP_ENUM_LAST; i++) {
+	for (guint i = 1; i < PK_GROUP_ENUM_LAST; i++) {
 		string = pk_group_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -300,7 +315,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the info bitfield */
-	for (i = 1; i < PK_INFO_ENUM_LAST; i++) {
+	for (guint i = 1; i < PK_INFO_ENUM_LAST; i++) {
 		string = pk_info_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -310,7 +325,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the severity bitfield */
-	for (i = 1; i < PK_SEVERITY_ENUM_LAST; i++) {
+	for (guint i = 1; i < PK_SEVERITY_ENUM_LAST; i++) {
 		string = pk_severity_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -321,7 +336,7 @@ pk_test_enum_func (void)
 	}
 
 	/* check we convert all the sig_type bitfield */
-	for (i = 0; i < PK_SIGTYPE_ENUM_LAST; i++) {
+	for (guint i = 0; i < PK_SIGTYPE_ENUM_LAST; i++) {
 		string = pk_sig_type_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -330,8 +345,18 @@ pk_test_enum_func (void)
 		}
 	}
 
+	/* check we convert all the transaction flag bitfield */
+	for (guint i = 0; i < PK_TRANSACTION_FLAG_ENUM_LAST; i++) {
+		string = pk_transaction_flag_enum_to_string (i);
+		if (string == NULL) {
+			/* so we get the value of i in the assert text */
+			g_assert_cmpint (0, ==, i);
+			break;
+		}
+	}
+
 	/* check we convert all the upgrade bitfield */
-	for (i = 0; i < PK_DISTRO_UPGRADE_ENUM_LAST; i++) {
+	for (guint i = 0; i < PK_DISTRO_UPGRADE_ENUM_LAST; i++) {
 		string = pk_distro_upgrade_enum_to_string (i);
 		if (string == NULL) {
 			/* so we get the value of i in the assert text */
@@ -474,6 +499,9 @@ pk_test_results_func (void)
 	g_assert_cmpint (packages->len, ==, 0);
 	g_ptr_array_unref (packages);
 
+	/* no restart was requested */
+	g_assert_cmpint (pk_results_get_require_restart_worst (results), ==, PK_RESTART_ENUM_NONE);
+
 	/* set valid exit code */
 	ret = pk_results_set_exit_code (results, PK_EXIT_ENUM_CANCELLED);
 	g_assert_true (ret);
@@ -520,6 +548,27 @@ pk_test_results_func (void)
 	g_object_unref (item);
 	g_free (package_id);
 	g_free (summary);
+
+	/* a later state of the same package replaces the earlier one in place */
+	item = pk_package_new ();
+	ret = pk_package_set_id (item, "powertop;1.8-1;i386;fedora;", &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	pk_results_add_package (results, item);
+	g_object_unref (item);
+	item = pk_package_new ();
+	pk_package_set_info (item, PK_INFO_ENUM_INSTALLING);
+	ret = pk_package_set_id (item, "gnome-power-manager;0.1.2;i386;fedora;", &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	pk_results_add_package (results, item);
+	g_object_unref (item);
+	packages = pk_results_get_package_array (results);
+	g_assert_cmpint (packages->len, ==, 2);
+	item = g_ptr_array_index (packages, 0);
+	g_assert_cmpstr (pk_package_get_id (item), ==, "gnome-power-manager;0.1.2;i386;fedora;");
+	g_assert_cmpint (pk_package_get_info (item), ==, PK_INFO_ENUM_INSTALLING);
+	g_ptr_array_unref (packages);
 
 	g_object_unref (results);
 }
@@ -957,6 +1006,7 @@ pk_test_client_helper_func (void)
 	PkClientHelper *helper;
 	g_autoptr(GMainContext) context = NULL;
 	g_autoptr(GSource) timeout_source = NULL;
+	g_autoptr(GSocket) listen_socket = NULL;
 	g_autoptr(GSocket) client_socket = NULL;
 	g_autoptr(GSocketAddress) address = NULL;
 	g_autoptr(GError) error = NULL;
@@ -981,8 +1031,19 @@ pk_test_client_helper_func (void)
 	context = g_main_context_new ();
 	g_main_context_push_thread_default (context);
 
+	/* the daemon creates and listens on the socket, the helper only accepts */
+	listen_socket = g_socket_new (G_SOCKET_FAMILY_UNIX,
+				      G_SOCKET_TYPE_STREAM,
+				      G_SOCKET_PROTOCOL_DEFAULT,
+				      &error);
+	g_assert_no_error (error);
+	address = g_unix_socket_address_new (socket_filename);
+	g_assert_true (g_socket_bind (listen_socket, address, TRUE, &error));
+	g_assert_true (g_socket_listen (listen_socket, &error));
+	g_assert_no_error (error);
+
 	helper = pk_client_helper_new ();
-	ret = pk_client_helper_start (helper, socket_filename, argv, NULL, &error);
+	ret = pk_client_helper_start (helper, listen_socket, argv, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ret);
 
@@ -994,7 +1055,6 @@ pk_test_client_helper_func (void)
 				      G_SOCKET_PROTOCOL_DEFAULT,
 				      &error);
 	g_assert_no_error (error);
-	address = g_unix_socket_address_new (socket_filename);
 	ret = g_socket_connect (client_socket, address, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ret);
@@ -1015,12 +1075,45 @@ pk_test_client_helper_func (void)
 	/* the helper has to consider the connection finished */
 	g_assert_false (pk_client_helper_is_active (helper));
 
+	/* the daemon shuts the socket down with the transaction: the helper has
+	 * to stop listening instead of spinning on failed accepts, and the
+	 * backend's connects are refused */
+	g_assert_true (pk_client_helper_is_listening (helper));
+#ifdef __linux__
+	g_assert_true (g_socket_shutdown (listen_socket, TRUE, TRUE, &error));
+	g_assert_no_error (error);
+#else
+	/* the BSDs refuse to shut down a listening socket */
+	if (!g_socket_shutdown (listen_socket, TRUE, TRUE, &error)) {
+		g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_CONNECTED);
+		g_test_message ("cannot shut down a listening socket: %s", error->message);
+		g_clear_error (&error);
+		goto out;
+	}
+#endif
+	for (guint i = 0; i < 10 && pk_client_helper_is_listening (helper); i++)
+		g_main_context_iteration (context, FALSE);
+	g_assert_false (pk_client_helper_is_listening (helper));
+	g_clear_object (&client_socket);
+	client_socket = g_socket_new (G_SOCKET_FAMILY_UNIX,
+				      G_SOCKET_TYPE_STREAM,
+				      G_SOCKET_PROTOCOL_DEFAULT,
+				      &error);
+	g_assert_no_error (error);
+	g_assert_false (g_socket_connect (client_socket, address, NULL, &error));
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CONNECTION_REFUSED);
+	g_clear_error (&error);
+
+#ifndef __linux__
+out:
+#endif
 	ret = pk_client_helper_stop (helper, &error);
 	g_assert_no_error (error);
 	g_assert_true (ret);
 
 	g_object_unref (helper);
 	g_main_context_pop_thread_default (context);
+	g_unlink (socket_filename);
 	g_rmdir (tmp_dir);
 }
 
@@ -1062,7 +1155,7 @@ pk_test_object_types_func (void)
 	PK_TEST_TYPE (PkTaskWrapper, pk_task_wrapper_new);
 	PK_TEST_TYPE (PkTransactionList, pk_transaction_list_new);
 
-	PK_TEST_TYPE (PkTransactionPast, pk_transaction_past_new);
+	PK_TEST_TYPE (PkHistoryItem, pk_history_item_new);
 	PK_TEST_TYPE (PkUpdateDetail, pk_update_detail_new);
 }
 
@@ -1082,17 +1175,18 @@ main (int argc, char **argv)
 	pk_offline_set_root_dir (PK_TEST_OFFLINE_ROOT);
 
 	/* tests go here */
-	g_test_add_func ("/packagekit-glib2/common", pk_test_common_func);
-	g_test_add_func ("/packagekit-glib2/enum", pk_test_enum_func);
-	g_test_add_func ("/packagekit-glib2/bitfield", pk_test_bitfield_func);
-	g_test_add_func ("/packagekit-glib2/package-id", pk_test_package_id_func);
-	g_test_add_func ("/packagekit-glib2/package-ids", pk_test_package_ids_func);
-	g_test_add_func ("/packagekit-glib2/results", pk_test_results_func);
-	g_test_add_func ("/packagekit-glib2/package", pk_test_package_func);
-	g_test_add_func ("/packagekit-glib2/offline", pk_test_offline_func);
-	g_test_add_func ("/packagekit-glib2/offline-upgrade", pk_test_offline_upgrade_func);
-	g_test_add_func ("/packagekit-glib2/object-types", pk_test_object_types_func);
-	g_test_add_func ("/packagekit-glib2/client-helper", pk_test_client_helper_func);
+	g_test_add_func ("/libpackagekit/common", pk_test_common_func);
+	g_test_add_func ("/libpackagekit/enum", pk_test_enum_func);
+	g_test_add_func ("/libpackagekit/file", pk_test_file_func);
+	g_test_add_func ("/libpackagekit/bitfield", pk_test_bitfield_func);
+	g_test_add_func ("/libpackagekit/package-id", pk_test_package_id_func);
+	g_test_add_func ("/libpackagekit/package-ids", pk_test_package_ids_func);
+	g_test_add_func ("/libpackagekit/results", pk_test_results_func);
+	g_test_add_func ("/libpackagekit/package", pk_test_package_func);
+	g_test_add_func ("/libpackagekit/offline", pk_test_offline_func);
+	g_test_add_func ("/libpackagekit/offline-upgrade", pk_test_offline_upgrade_func);
+	g_test_add_func ("/libpackagekit/object-types", pk_test_object_types_func);
+	g_test_add_func ("/libpackagekit/client-helper", pk_test_client_helper_func);
 
 	return g_test_run ();
 }

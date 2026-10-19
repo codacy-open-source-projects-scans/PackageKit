@@ -73,7 +73,7 @@ pkgc_query_on_task_finished_cb (GObject *source_object, GAsyncResult *res, gpoin
 	array = pk_results_get_files_array (results);
 	for (guint i = 0; i < array->len; i++) {
 		PkFiles *files = PK_FILES (g_ptr_array_index (array, i));
-		gchar **filelist = NULL;
+		GPtrArray *filelist;
 		const char *package_id;
 
 		package_id = pk_files_get_package_id (files);
@@ -81,21 +81,30 @@ pkgc_query_on_task_finished_cb (GObject *source_object, GAsyncResult *res, gpoin
 
 		if (ctx->output_mode == PKGCLI_MODE_JSON) {
 			g_autoptr(json_t) root = json_object ();
-			json_t *files_array;
+			json_t *files_obj;
 
-			files_array = json_array ();
+			files_obj = json_object ();
 
 			json_object_set_new (root, "package", json_string (package_id));
 
-			for (guint j = 0; filelist && filelist[j] != NULL; j++)
-				json_array_append_new (files_array, json_string (filelist[j]));
+			for (guint j = 0; j < filelist->len; j++) {
+				PkFile *file = g_ptr_array_index (filelist, j);
+				json_object_set_new (files_obj,
+						     pk_file_get_path (file),
+						     json_string (pk_file_kind_enum_to_string (
+							 pk_file_get_kind (file))));
+			}
 
-			json_object_set_new (root, "files", files_array);
+			json_object_set_new (root, "files", files_obj);
 
 			pkgc_print_json (root);
 		} else {
-			for (guint j = 0; filelist && filelist[j] != NULL; j++)
-				g_print ("%s\n", filelist[j]);
+			for (guint j = 0; j < filelist->len; j++) {
+				PkFile *file = g_ptr_array_index (filelist, j);
+				gboolean is_dir = pk_file_get_kind (file) ==
+						  PK_FILE_KIND_ENUM_DIRECTORY;
+				g_print ("%s%s\n", pk_file_get_path (file), is_dir ? "/" : "");
+			}
 		}
 	}
 
@@ -129,9 +138,9 @@ pkgc_query_on_client_finished_cb (GObject *source_object, GAsyncResult *res, gpo
 		g_autoptr(GPtrArray) array = NULL;
 
 		/* Process transactions */
-		array = pk_results_get_transaction_array (results);
+		array = pk_results_get_history_array (results);
 		for (guint i = 0; i < array->len; i++) {
-			PkTransactionPast *transaction = g_ptr_array_index (array, i);
+			PkHistoryItem *transaction = g_ptr_array_index (array, i);
 			pkgc_print_transaction (ctx, transaction);
 			g_print ("\n"); /* add some visual spacing */
 		}
@@ -255,13 +264,15 @@ pkgc_history (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 	}
 
 	/* Get transaction history */
-	pk_client_get_old_transactions_async (PK_CLIENT (ctx->task),
-					      limit,
-					      ctx->cancellable,
-					      pkgc_context_on_progress_cb,
-					      ctx,
-					      pkgc_query_on_client_finished_cb,
-					      ctx);
+	pk_client_get_history_async (PK_CLIENT (ctx->task),
+				     0,
+				     limit,
+				     NULL,
+				     ctx->cancellable,
+				     pkgc_context_on_progress_cb,
+				     ctx,
+				     pkgc_query_on_client_finished_cb,
+				     ctx);
 
 	g_main_loop_run (ctx->loop);
 	return ctx->exit_code;
@@ -457,12 +468,12 @@ pkgc_query_show (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv
 }
 
 /**
- * pkgc_query_list_depends:
+ * pkgc_query_list_dependencies:
  *
  * Display which other packages this package depends on.
  */
 static gint
-pkgc_query_list_depends (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
+pkgc_query_list_dependencies (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 {
 	gboolean recursive = FALSE;
 	g_auto(GStrv) package_ids = NULL;
@@ -470,7 +481,7 @@ pkgc_query_list_depends (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gcha
 	g_autoptr(GError) error = NULL;
 
 	/* Each option is one record per line; clang-format would put every field
- * on a line of its own and make the table unreadable. */
+	 * on a line of its own and make the table unreadable. */
 	/* clang-format off */
 	const GOptionEntry options[] = {
 		{ "recursive", 0, G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, &recursive,
@@ -484,7 +495,7 @@ pkgc_query_list_depends (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gcha
 	    ctx,
 	    cmd,
 	    "PACKAGE...",
-	    /* TRANSLATORS: Description for pkgcli depends-on */
+	    /* TRANSLATORS: Description for pkgcli list-dependencies */
 	    _("Show dependencies for one or more packages."));
 	g_option_context_add_main_entries (option_context, options, NULL);
 
@@ -498,15 +509,15 @@ pkgc_query_list_depends (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gcha
 	}
 
 	/* get dependencies */
-	pk_task_depends_on_async (PK_TASK (ctx->task),
-				  ctx->filters,
-				  package_ids,
-				  recursive,
-				  ctx->cancellable,
-				  pkgc_context_on_progress_cb,
-				  ctx,
-				  pkgc_query_on_task_finished_cb,
-				  ctx);
+	pk_task_get_dependencies_async (PK_TASK (ctx->task),
+					ctx->filters,
+					package_ids,
+					recursive,
+					ctx->cancellable,
+					pkgc_context_on_progress_cb,
+					ctx,
+					pkgc_query_on_task_finished_cb,
+					ctx);
 
 	g_main_loop_run (ctx->loop);
 	return ctx->exit_code;
@@ -759,7 +770,7 @@ pkgc_query_list_requiring (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gc
 	g_autoptr(GOptionContext) option_context = NULL;
 
 	/* Each option is one record per line; clang-format would put every field
- * on a line of its own and make the table unreadable. */
+	 * on a line of its own and make the table unreadable. */
 	/* clang-format off */
 	const GOptionEntry options[] = {
 		{ "recursive", 0, G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, &recursive,
@@ -773,7 +784,7 @@ pkgc_query_list_requiring (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gc
 	    ctx,
 	    cmd,
 	    "PACKAGE...",
-	    /* TRANSLATORS: Description for pkgcli required-by */
+	    /* TRANSLATORS: Description for pkgcli list-requiring */
 	    _("Show which packages require the specified packages."));
 	g_option_context_add_main_entries (option_context, options, NULL);
 
@@ -788,15 +799,15 @@ pkgc_query_list_requiring (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gc
 	}
 
 	/* get packages that require this package */
-	pk_task_required_by_async (PK_TASK (ctx->task),
-				   ctx->filters,
-				   package_ids,
-				   recursive,
-				   ctx->cancellable,
-				   pkgc_context_on_progress_cb,
-				   ctx,
-				   pkgc_query_on_task_finished_cb,
-				   ctx);
+	pk_task_get_dependents_async (PK_TASK (ctx->task),
+				      ctx->filters,
+				      package_ids,
+				      recursive,
+				      ctx->cancellable,
+				      pkgc_context_on_progress_cb,
+				      ctx,
+				      pkgc_query_on_task_finished_cb,
+				      ctx);
 
 	g_main_loop_run (ctx->loop);
 	return ctx->exit_code;
@@ -1006,10 +1017,11 @@ pkgc_register_query_commands (PkgcliContext *ctx)
 
 	pkgc_context_register_command (
 	    ctx,
-	    "list-depends",
-	    pkgc_query_list_depends,
-	    /* TRANSLATORS: Description for list-depends command in pkgcli help */
+	    "list-dependencies",
+	    pkgc_query_list_dependencies,
+	    /* TRANSLATORS: Description for list-dependencies command in pkgcli help */
 	    _("List dependencies of the specified package(s)"));
+	pkgc_context_set_command_alias (ctx, "list-dependencies", "list-deps");
 
 	pkgc_context_register_command (
 	    ctx,
@@ -1017,6 +1029,7 @@ pkgc_register_query_commands (PkgcliContext *ctx)
 	    pkgc_query_list_requiring,
 	    /* TRANSLATORS: Description for list-requiring command in pkgcli help */
 	    _("List other packages requiring the specified package(s)"));
+	pkgc_context_set_command_alias (ctx, "list-requiring", "list-rdeps");
 
 	pkgc_context_register_command (
 	    ctx,

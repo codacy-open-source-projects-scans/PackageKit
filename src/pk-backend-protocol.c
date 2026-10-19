@@ -83,7 +83,6 @@ static json_t *
 pk_backend_protocol_build_ctx (PkBackendJob *job)
 {
 	PkBackend *backend = pk_backend_job_get_backend (job);
-	const gchar *frontend_socket = pk_backend_job_get_frontend_socket (job);
 	guint cache_age = pk_backend_job_get_cache_age (job);
 	g_autofree gchar *eulas = NULL;
 	json_t *ctx = json_object ();
@@ -103,9 +102,6 @@ pk_backend_protocol_build_ctx (PkBackendJob *job)
 
 	json_object_set_new (ctx, "locale", json_string (pk_backend_job_get_locale (job)));
 	json_object_set_new (ctx, "uid", json_integer (pk_backend_job_get_uid (job)));
-	json_object_set_new (ctx,
-			     "network",
-			     json_boolean (backend != NULL && pk_backend_is_online (backend)));
 	json_object_set_new (ctx, "background", json_boolean (pk_backend_job_get_background (job)));
 	json_object_set_new (ctx,
 			     "interactive",
@@ -113,14 +109,6 @@ pk_backend_protocol_build_ctx (PkBackendJob *job)
 	json_object_set_new (ctx,
 			     "cache_age",
 			     cache_age == G_MAXUINT ? json_null () : json_integer (cache_age));
-	json_object_set_new (ctx,
-			     "details_with_deps_size",
-			     json_boolean (pk_backend_job_get_details_with_deps_size (job)));
-	json_object_set_new (ctx,
-			     "frontend_socket",
-			     frontend_socket != NULL && frontend_socket[0] != '\0'
-				 ? json_string (frontend_socket)
-				 : json_null ());
 	for (guint i = 0; i < G_N_ELEMENTS (proxies); i++) {
 		if (proxies[i].value != NULL && proxies[i].value[0] != '\0')
 			json_object_set_new (proxy, proxies[i].key, json_string (proxies[i].value));
@@ -149,6 +137,7 @@ pk_backend_protocol_build_run (PkBackendJob *job, const gchar *job_id, GError **
 	GVariant *params = pk_backend_job_get_parameters (job);
 	g_autoptr(json_t) root = json_object ();
 	g_auto(GStrv) strv = NULL;
+	g_autoptr(GVariant) handles = NULL;
 	const gchar *s1 = NULL;
 	const gchar *s2 = NULL;
 	const gchar *s3 = NULL;
@@ -190,8 +179,8 @@ pk_backend_protocol_build_run (PkBackendJob *job, const gchar *job_id, GError **
 		g_variant_get (params, "(t)", &bits);
 		FILTERS (bits);
 		break;
-	case PK_ROLE_ENUM_DEPENDS_ON:
-	case PK_ROLE_ENUM_REQUIRED_BY:
+	case PK_ROLE_ENUM_GET_DEPENDENCIES:
+	case PK_ROLE_ENUM_GET_DEPENDENTS:
 		g_variant_get (params, "(t^asb)", &bits, &strv, &b1);
 		FILTERS (bits);
 		STRV ("package_ids", strv);
@@ -205,7 +194,10 @@ pk_backend_protocol_build_run (PkBackendJob *job, const gchar *job_id, GError **
 		break;
 	case PK_ROLE_ENUM_GET_DETAILS_LOCAL:
 	case PK_ROLE_ENUM_GET_FILES_LOCAL:
-		g_variant_get (params, "(^as)", &strv);
+		g_variant_get (params, "(@ah)", &handles);
+		strv = pk_backend_job_get_file_paths (job, handles, error);
+		if (strv == NULL)
+			return NULL;
 		STRV ("files", strv);
 		break;
 	case PK_ROLE_ENUM_GET_DISTRO_UPGRADES:
@@ -222,8 +214,11 @@ pk_backend_protocol_build_run (PkBackendJob *job, const gchar *job_id, GError **
 		STRV ("package_ids", strv);
 		break;
 	case PK_ROLE_ENUM_INSTALL_FILES:
-		g_variant_get (params, "(t^as)", &bits, &strv);
+		g_variant_get (params, "(t@ah)", &bits, &handles);
 		FLAGS (bits);
+		strv = pk_backend_job_get_file_paths (job, handles, error);
+		if (strv == NULL)
+			return NULL;
 		STRV ("files", strv);
 		break;
 	case PK_ROLE_ENUM_REMOVE_PACKAGES:
@@ -472,6 +467,55 @@ pk_backend_protocol_get_enum (json_t *obj,
 #define pk_sig_type_ENUM_UNKNOWN_VALUE	     PK_SIGTYPE_ENUM_UNKNOWN
 #define pk_distro_upgrade_ENUM_UNKNOWN_VALUE PK_DISTRO_UPGRADE_ENUM_UNKNOWN
 #define pk_role_ENUM_UNKNOWN_VALUE	     PK_ROLE_ENUM_UNKNOWN
+#define pk_issue_kind_ENUM_UNKNOWN_VALUE     PK_ISSUE_KIND_ENUM_UNKNOWN
+
+/**
+ * pk_backend_protocol_get_issues:
+ *
+ * Optional array of issue objects: `kind` and `url` are required, `id` and
+ * `title` optional. Returns an empty array when the key is absent.
+ */
+static gboolean
+pk_backend_protocol_get_issues (json_t *obj, const gchar *key, GPtrArray **out, GError **error)
+{
+	json_t *array = json_object_get (obj, key);
+	g_autoptr(GPtrArray)
+		      issues = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_issue_free);
+	json_t *item;
+	gsize i;
+
+	if (array != NULL && !json_is_null (array)) {
+		if (!json_is_array (array))
+			return pk_backend_protocol_invalid (error,
+							    "field '%s' must be an array",
+							    key);
+		json_array_foreach (array, i, item)
+		{
+			PkIssueKindEnum kind = PK_ISSUE_KIND_ENUM_UNKNOWN;
+			const gchar *url = NULL;
+			const gchar *id = NULL;
+			const gchar *title = NULL;
+
+			if (!json_is_object (item))
+				return pk_backend_protocol_invalid (
+				    error,
+				    "field '%s' must contain only objects",
+				    key);
+			if (!GET_ENUM (item, "kind", pk_issue_kind, &kind) ||
+			    !pk_backend_protocol_get_string (item, "url", FALSE, &url, error) ||
+			    !pk_backend_protocol_get_string (item, "id", TRUE, &id, error) ||
+			    !pk_backend_protocol_get_string (item, "title", TRUE, &title, error))
+				return FALSE;
+			if (url[0] == '\0')
+				return pk_backend_protocol_invalid (
+				    error,
+				    "issue 'url' must not be empty");
+			g_ptr_array_add (issues, pk_issue_new (kind, url, id, title));
+		}
+	}
+	*out = g_steal_pointer (&issues);
+	return TRUE;
+}
 
 static gboolean
 pk_backend_protocol_get_package_id (json_t *obj,
@@ -729,15 +773,12 @@ pk_backend_protocol_handle_update_details (json_t *root, PkBackendJob *job, GErr
 		const gchar *package_id = NULL;
 		const gchar *update_text = NULL;
 		const gchar *changelog = NULL;
-		const gchar *issued = NULL;
-		const gchar *updated = NULL;
+		const gchar *time_issued = NULL;
 		PkRestartEnum restart = PK_RESTART_ENUM_UNKNOWN;
 		PkUpdateStateEnum state = PK_UPDATE_STATE_ENUM_UNKNOWN;
 		g_auto(GStrv) updates = NULL;
 		g_auto(GStrv) obsoletes = NULL;
-		g_auto(GStrv) vendor_urls = NULL;
-		g_auto(GStrv) bugzilla_urls = NULL;
-		g_auto(GStrv) cve_urls = NULL;
+		g_autoptr(GPtrArray) issues = NULL;
 
 		if (!json_is_object (item))
 			return pk_backend_protocol_invalid (error,
@@ -749,9 +790,7 @@ pk_backend_protocol_handle_update_details (json_t *root, PkBackendJob *job, GErr
 							 error) ||
 		    !pk_backend_protocol_get_strv (item, "updates", &updates, error) ||
 		    !pk_backend_protocol_get_strv (item, "obsoletes", &obsoletes, error) ||
-		    !pk_backend_protocol_get_strv (item, "vendor_urls", &vendor_urls, error) ||
-		    !pk_backend_protocol_get_strv (item, "bugzilla_urls", &bugzilla_urls, error) ||
-		    !pk_backend_protocol_get_strv (item, "cve_urls", &cve_urls, error) ||
+		    !pk_backend_protocol_get_issues (item, "issues", &issues, error) ||
 		    !GET_ENUM (item, "restart", pk_restart, &restart) ||
 		    !pk_backend_protocol_get_string (item,
 						     "update_text",
@@ -760,24 +799,67 @@ pk_backend_protocol_handle_update_details (json_t *root, PkBackendJob *job, GErr
 						     error) ||
 		    !pk_backend_protocol_get_string (item, "changelog", TRUE, &changelog, error) ||
 		    !GET_ENUM (item, "state", pk_update_state, &state) ||
-		    !pk_backend_protocol_get_string (item, "issued", TRUE, &issued, error) ||
-		    !pk_backend_protocol_get_string (item, "updated", TRUE, &updated, error))
+		    !pk_backend_protocol_get_string (item,
+						     "time_issued",
+						     TRUE,
+						     &time_issued,
+						     error))
 			return FALSE;
 		g_ptr_array_add (details,
 				 pk_update_detail_new_full (package_id,
 							    updates,
 							    obsoletes,
-							    vendor_urls,
-							    bugzilla_urls,
-							    cve_urls,
+							    issues,
 							    restart,
 							    update_text,
 							    changelog,
 							    state,
-							    issued,
-							    updated));
+							    time_issued));
 	}
 	pk_backend_job_update_details (job, details);
+	return TRUE;
+}
+
+/**
+ * pk_backend_protocol_handle_files:
+ *
+ * `files` is an object of path: kind, as a path cannot be listed twice
+ */
+static gboolean
+pk_backend_protocol_handle_files (json_t *root, PkBackendJob *job, GError **error)
+{
+	const gchar *package_id = NULL;
+	json_t *obj = json_object_get (root, "files");
+	const gchar *path;
+	json_t *value;
+	g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+
+	if (!pk_backend_protocol_get_package_id (root, "package_id", TRUE, &package_id, error))
+		return FALSE;
+	if (obj == NULL || !json_is_object (obj))
+		return pk_backend_protocol_invalid (
+		    error,
+		    "field 'files' must be an object of path: kind");
+	json_object_foreach (obj, path, value)
+	{
+		PkFileKindEnum kind;
+		const gchar *text = json_string_value (value);
+
+		if (text == NULL)
+			return pk_backend_protocol_invalid (error,
+							    "file kind of '%s' must be a string",
+							    path);
+		kind = pk_file_kind_enum_from_string (text);
+		if (kind == PK_FILE_KIND_ENUM_UNKNOWN &&
+		    g_strcmp0 (text, pk_file_kind_enum_to_string (PK_FILE_KIND_ENUM_UNKNOWN)) != 0)
+			return pk_backend_protocol_invalid (
+			    error,
+			    "file kind of '%s' has unknown value '%s'",
+			    path,
+			    text);
+		g_ptr_array_add (files, pk_file_new (path, kind));
+	}
+	pk_backend_job_files (job, package_id, files);
 	return TRUE;
 }
 
@@ -980,15 +1062,7 @@ pk_backend_protocol_handle_event (const gchar *log_domain,
 		return pk_backend_protocol_handle_update_details (root, job, error);
 
 	} else if (g_strcmp0 (ev, "files") == 0) {
-		g_auto(GStrv) files = NULL;
-		if (!pk_backend_protocol_get_package_id (root,
-							 "package_id",
-							 TRUE,
-							 &package_id,
-							 error) ||
-		    !pk_backend_protocol_get_strv (root, "files", &files, error))
-			return FALSE;
-		pk_backend_job_files (job, package_id, files);
+		return pk_backend_protocol_handle_files (root, job, error);
 
 	} else if (g_strcmp0 (ev, "repo-details") == 0) {
 		return pk_backend_protocol_handle_repo_details (root, job, error);

@@ -19,7 +19,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_TASK_H
@@ -186,15 +186,15 @@ void	   pk_task_get_updates_async (PkTask		 *task,
 				      gpointer		  progress_user_data,
 				      GAsyncReadyCallback callback_ready,
 				      gpointer		  user_data);
-void	   pk_task_depends_on_async (PkTask		*task,
-				     PkBitfield		 filters,
-				     gchar	       **package_ids,
-				     gboolean		 recursive,
-				     GCancellable	*cancellable,
-				     PkProgressCallback	 progress_callback,
-				     gpointer		 progress_user_data,
-				     GAsyncReadyCallback callback_ready,
-				     gpointer		 user_data);
+void	   pk_task_get_dependencies_async (PkTask	      *task,
+					   PkBitfield	       filters,
+					   gchar	     **package_ids,
+					   gboolean	       recursive,
+					   GCancellable	      *cancellable,
+					   PkProgressCallback  progress_callback,
+					   gpointer	       progress_user_data,
+					   GAsyncReadyCallback callback_ready,
+					   gpointer	       user_data);
 void	   pk_task_get_packages_async (PkTask		  *task,
 				       PkBitfield	   filters,
 				       GCancellable	  *cancellable,
@@ -202,15 +202,15 @@ void	   pk_task_get_packages_async (PkTask		  *task,
 				       gpointer		   progress_user_data,
 				       GAsyncReadyCallback callback_ready,
 				       gpointer		   user_data);
-void	   pk_task_required_by_async (PkTask		 *task,
-				      PkBitfield	  filters,
-				      gchar		**package_ids,
-				      gboolean		  recursive,
-				      GCancellable	 *cancellable,
-				      PkProgressCallback  progress_callback,
-				      gpointer		  progress_user_data,
-				      GAsyncReadyCallback callback_ready,
-				      gpointer		  user_data);
+void	   pk_task_get_dependents_async (PkTask		    *task,
+					 PkBitfield	     filters,
+					 gchar		   **package_ids,
+					 gboolean	     recursive,
+					 GCancellable	    *cancellable,
+					 PkProgressCallback  progress_callback,
+					 gpointer	     progress_user_data,
+					 GAsyncReadyCallback callback_ready,
+					 gpointer	     user_data);
 void	   pk_task_what_provides_async (PkTask		   *task,
 					PkBitfield	    filters,
 					gchar		  **values,
@@ -281,6 +281,9 @@ gboolean   pk_task_get_allow_downgrade (PkTask *task);
 void	   pk_task_set_allow_reinstall (PkTask	*task,
 					gboolean allow_reinstall);
 gboolean   pk_task_get_allow_reinstall (PkTask *task);
+void	   pk_task_set_purge (PkTask  *task,
+			      gboolean purge);
+gboolean   pk_task_get_purge (PkTask *task);
 void	   pk_task_set_only_trusted (PkTask  *task,
 				     gboolean only_trusted);
 gboolean   pk_task_get_only_trusted (PkTask *task);

@@ -19,7 +19,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_CONTROL_H
@@ -75,7 +75,6 @@ struct _PkControlClass
 					  gchar	   **transaction_ids);
 	void (*updates_changed) (PkControl *control);
 	void (*repo_list_changed) (PkControl *control);
-	void (*network_state_changed) (PkControl *control);
 	void (*restart_schedule) (PkControl *control);
 	void (*locked) (PkControl *control,
 			gboolean   is_locked);

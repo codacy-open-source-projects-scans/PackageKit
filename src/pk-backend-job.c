@@ -21,8 +21,16 @@
 
 #include <config.h>
 
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <gio/gunixinputstream.h>
+#include <gio/gunixoutputstream.h>
 #include <glib.h>
 #include <glib/gprintf.h>
+#include <glib/gstdio.h>
 
 #include <pk-results.h>
 
@@ -76,6 +84,11 @@ struct _PkBackendJob
 	gboolean set_signature;
 	gchar *cmdline;
 	gchar *frontend_socket;
+	GUnixFDList *file_fds;
+	gchar **file_mime_types;
+	gchar *staging_root;
+	gchar *staging_dir;
+	struct _PkBackendJobFile *files;
 	gchar *locale;
 	gchar *no_proxy;
 	gchar *pac;
@@ -101,7 +114,6 @@ struct _PkBackendJob
 	gboolean allow_cancel;
 	gboolean background;
 	gboolean interactive;
-	gboolean details_with_deps_size;
 	gboolean locked;
 	GHashTable *emitted;
 	PkErrorEnum last_error_code;
@@ -449,6 +461,344 @@ pk_backend_job_get_cache_age (PkBackendJob *job)
 	return job->cache_age;
 }
 
+struct _PkBackendJobFile
+{
+	gchar *path;
+	gint fd;
+};
+typedef struct _PkBackendJobFile PkBackendJobFile;
+
+/**
+ * pk_backend_job_set_file_fds:
+ * @fds: a read-only fd for each file the job works on, as sent by the client
+ *
+ * The daemon hands the files of an InstallFiles, GetDetailsLocal or
+ * GetFilesLocal job to the backend this way. The backend asks for them with
+ * pk_backend_job_get_file_fd() or pk_backend_job_get_file_path().
+ **/
+void
+pk_backend_job_set_file_fds (PkBackendJob *job, GUnixFDList *fds)
+{
+	gint n_fds;
+	g_autofree gchar *cache_dir = NULL;
+
+	g_return_if_fail (PK_IS_BACKEND_JOB (job));
+	g_return_if_fail (PK_IS_BACKEND (job->backend));
+	g_return_if_fail (G_IS_UNIX_FD_LIST (fds));
+	g_return_if_fail (job->file_fds == NULL);
+
+	if (job->file_mime_types != NULL)
+		g_clear_pointer (&job->file_mime_types, g_strfreev);
+	if (job->staging_root != NULL)
+		g_clear_pointer (&job->staging_root, g_free);
+	if (job->files != NULL)
+		g_clear_pointer (&job->files, g_free);
+
+	job->file_fds = g_object_ref (fds);
+	job->file_mime_types = pk_backend_get_mime_types (job->backend);
+	cache_dir = pk_util_get_cache_dir (job->conf);
+	job->staging_root = g_build_filename (cache_dir, "staging", NULL);
+	n_fds = g_unix_fd_list_get_length (fds);
+	job->files = g_new0 (PkBackendJobFile, n_fds + 1);
+	for (gint i = 0; i < n_fds; i++)
+		job->files[i].fd = -1;
+}
+
+/*
+ * pk_backend_job_file_open:
+ *
+ * Look up the client's fd behind @handle. Only regular files are accepted.
+ */
+static gboolean
+pk_backend_job_file_open (PkBackendJob *job, gint32 handle, gint *fd, GError **error)
+{
+	struct stat st;
+	const gint *fds;
+	gint n_fds = 0;
+
+	if (job->file_fds != NULL)
+		fds = g_unix_fd_list_peek_fds (job->file_fds, &n_fds);
+	if (handle < 0 || handle >= n_fds) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_FOUND,
+			     "the job has no file with handle %d",
+			     handle);
+		return FALSE;
+	}
+	if (fstat (fds[handle], &st) != 0 || !S_ISREG (st.st_mode)) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_REGULAR_FILE,
+			     "file %d is not a regular file",
+			     handle);
+		return FALSE;
+	}
+
+	*fd = fds[handle];
+	return TRUE;
+}
+
+/*
+ * pk_backend_job_file_check_type:
+ *
+ * Sniff the content type of @fd and reject what the backend does not accept.
+ * This is a filter on what the backend is handed, not a guarantee: the
+ * backend has to cope with a malformed file either way.
+ */
+static gboolean
+pk_backend_job_file_check_type (PkBackendJob *job, gint fd, const gchar *name, GError **error)
+{
+	guchar buf[4096];
+	gssize len;
+	g_autofree gchar *content_type = NULL;
+
+	len = pread (fd, buf, sizeof (buf), 0);
+	if (len < 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     g_io_error_from_errno (errno),
+			     "cannot read %s: %s",
+			     name,
+			     g_strerror (errno));
+		return FALSE;
+	}
+	content_type = g_content_type_guess (name, buf, len, NULL);
+	if (job->file_mime_types == NULL ||
+	    !g_strv_contains ((const gchar *const *) job->file_mime_types, content_type)) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_INVALID_DATA,
+			     "%s: unsupported content type %s",
+			     name,
+			     content_type);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/*
+ * pk_backend_job_stage_file:
+ *
+ * Copy the client's fd behind @handle into a directory only root can reach
+ * and check the copy is a package file the backend accepts. The check runs
+ * on the copy, right before the backend reads it, so the backend reads
+ * exactly the bytes that were checked. Reading the client's fd can block
+ * for as long as the client likes, so this must not run on the main loop.
+ */
+static PkBackendJobFile *
+pk_backend_job_stage_file (PkBackendJob *job, gint32 handle, GError **error)
+{
+	PkBackendJobFile *file;
+	gint fd;
+	gint out_fd;
+	g_autofree gchar *name = NULL;
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *path = NULL;
+	g_autoptr(GInputStream) in = NULL;
+	g_autoptr(GOutputStream) out = NULL;
+
+	if (!pk_backend_job_file_open (job, handle, &fd, error))
+		return NULL;
+	file = &job->files[handle];
+	if (file->path != NULL)
+		return file;
+
+	/* one private directory per job */
+	if (job->staging_dir == NULL) {
+		struct stat st;
+		g_autofree gchar *template = g_build_filename (job->staging_root,
+							       "job-XXXXXX",
+							       NULL);
+
+		/* the staging root must be ours and private */
+		if (g_mkdir_with_parents (job->staging_root, 0700) != 0 ||
+		    g_lstat (job->staging_root, &st) != 0) {
+			g_set_error (error,
+				     G_IO_ERROR,
+				     g_io_error_from_errno (errno),
+				     "cannot create %s: %s",
+				     job->staging_root,
+				     g_strerror (errno));
+			return NULL;
+		}
+		if (!S_ISDIR (st.st_mode) || st.st_uid != geteuid () ||
+		    (st.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+			g_set_error (error,
+				     G_IO_ERROR,
+				     G_IO_ERROR_PERMISSION_DENIED,
+				     "%s is not a private directory of ours",
+				     job->staging_root);
+			return NULL;
+		}
+		if (g_mkdtemp_full (template, 0700) == NULL) {
+			g_set_error (error,
+				     G_IO_ERROR,
+				     g_io_error_from_errno (errno),
+				     "cannot create %s: %s",
+				     template,
+				     g_strerror (errno));
+			return NULL;
+		}
+
+		job->staging_dir = g_steal_pointer (&template);
+	}
+
+	/* keep the original basename: some package managers key off the suffix */
+	name = pk_fd_get_basename (fd);
+	dir = g_strdup_printf ("%s/%d", job->staging_dir, handle);
+	path = g_build_filename (dir, name, NULL);
+	if (g_mkdir (dir, 0700) != 0 ||
+	    (out_fd = open (path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) < 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     g_io_error_from_errno (errno),
+			     "cannot create %s: %s",
+			     path,
+			     g_strerror (errno));
+		return NULL;
+	}
+
+	/* copy file */
+	in = g_unix_input_stream_new (fd, FALSE);
+	out = g_unix_output_stream_new (out_fd, TRUE);
+	if (lseek (fd, 0, SEEK_SET) < 0 ||
+	    g_output_stream_splice (out, in, G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET, NULL, error) <
+		0) {
+		g_prefix_error (error, "cannot copy %s: ", name);
+		return NULL;
+	}
+
+	/* now the backend reads the checked copy, not the client's fd */
+	file->fd = open (path, O_RDONLY | O_CLOEXEC);
+	if (file->fd < 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     g_io_error_from_errno (errno),
+			     "cannot open %s: %s",
+			     path,
+			     g_strerror (errno));
+		return NULL;
+	}
+	if (!pk_backend_job_file_check_type (job, file->fd, name, error))
+		return NULL;
+
+	file->path = g_steal_pointer (&path);
+	return file;
+}
+
+/**
+ * pk_backend_job_stage_files:
+ *
+ * Copy and check every file of the job, so that later calls to
+ * pk_backend_job_get_file_path() cannot block. Meant for callers that have
+ * to build the request on the main loop, like the spawn backend.
+ *
+ * Return value: %TRUE if every file is a package file the backend accepts
+ **/
+gboolean
+pk_backend_job_stage_files (PkBackendJob *job, GError **error)
+{
+	gint n_fds = 0;
+
+	g_return_val_if_fail (PK_IS_BACKEND_JOB (job), FALSE);
+
+	if (job->file_fds != NULL)
+		n_fds = g_unix_fd_list_get_length (job->file_fds);
+	for (gint i = 0; i < n_fds; i++) {
+		if (pk_backend_job_stage_file (job, i, error) == NULL)
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
+/**
+ * pk_backend_job_get_file_fd:
+ * @handle: an entry of the `ah` array in the job parameters
+ *
+ * The client's own fd, rewound to the start, after a check that it is a
+ * regular file of a content type the backend accepts.
+ *
+ * Return value: a read-only fd owned by the job, or -1 with @error set
+ **/
+gint
+pk_backend_job_get_file_fd (PkBackendJob *job, gint32 handle, GError **error)
+{
+	gint fd;
+	g_autofree gchar *name = NULL;
+
+	g_return_val_if_fail (PK_IS_BACKEND_JOB (job), -1);
+
+	if (!pk_backend_job_file_open (job, handle, &fd, error))
+		return -1;
+	name = pk_fd_get_basename (fd);
+	if (!pk_backend_job_file_check_type (job, fd, name, error))
+		return -1;
+	if (lseek (fd, 0, SEEK_SET) < 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     g_io_error_from_errno (errno),
+			     "cannot rewind %s: %s",
+			     name,
+			     g_strerror (errno));
+		return -1;
+	}
+
+	return fd;
+}
+
+/**
+ * pk_backend_job_get_file_path:
+ * @handle: an entry of the `ah` array in the job parameters
+ *
+ * The path of a private copy of the file behind @handle, for backends that
+ * cannot work on an fd. The copy is checked to be of a content type the
+ * backend accepts, and cannot be changed by the client afterwards. It
+ * belongs to the daemon and goes away with the job.
+ *
+ * Return value: a path owned by the job, or %NULL with @error set
+ **/
+const gchar *
+pk_backend_job_get_file_path (PkBackendJob *job, gint32 handle, GError **error)
+{
+	PkBackendJobFile *file;
+
+	g_return_val_if_fail (PK_IS_BACKEND_JOB (job), NULL);
+
+	file = pk_backend_job_stage_file (job, handle, error);
+	return file != NULL ? file->path : NULL;
+}
+
+/**
+ * pk_backend_job_get_file_paths:
+ * @handles: the `ah` array from the job parameters
+ *
+ * Return value: (transfer full): the path of every file in @handles, or
+ * %NULL with @error set
+ **/
+gchar **
+pk_backend_job_get_file_paths (PkBackendJob *job, GVariant *handles, GError **error)
+{
+	const gint32 *h;
+	gsize n = 0;
+	g_auto(GStrv) paths = NULL;
+
+	g_return_val_if_fail (PK_IS_BACKEND_JOB (job), NULL);
+	g_return_val_if_fail (handles != NULL, NULL);
+
+	h = g_variant_get_fixed_array (handles, &n, sizeof (gint32));
+	paths = g_new0 (gchar *, n + 1);
+	for (gsize i = 0; i < n; i++) {
+		paths[i] = g_strdup (pk_backend_job_get_file_path (job, h[i], error));
+		if (paths[i] == NULL)
+			return NULL;
+	}
+
+	return g_steal_pointer (&paths);
+}
+
 void
 pk_backend_job_set_cache_age (PkBackendJob *job, guint cache_age)
 {
@@ -512,22 +862,6 @@ pk_backend_job_set_interactive (PkBackendJob *job, gboolean interactive)
 	g_return_if_fail (PK_IS_BACKEND_JOB (job));
 
 	job->interactive = interactive;
-}
-
-gboolean
-pk_backend_job_get_details_with_deps_size (PkBackendJob *job)
-{
-	g_return_val_if_fail (PK_IS_BACKEND_JOB (job), FALSE);
-
-	return job->details_with_deps_size;
-}
-
-void
-pk_backend_job_set_details_with_deps_size (PkBackendJob *job, gboolean details_with_deps_size)
-{
-	g_return_if_fail (PK_IS_BACKEND_JOB (job));
-
-	job->details_with_deps_size = details_with_deps_size;
 }
 
 PkRoleEnum
@@ -1215,30 +1549,39 @@ pk_backend_job_package_status (PkBackendJob *job, const gchar *package_id, PkInf
 static void
 pk_backend_job_update_detail_validate (PkUpdateDetail *item)
 {
-	g_autofree gchar *issued = NULL;
-	g_autofree gchar *updated = NULL;
-	g_autoptr(GDateTime) datetime = NULL;
+	const gchar *time_issued;
+	GPtrArray *issues;
 
-	g_object_get (item, "issued", &issued, "updated", &updated, NULL);
+	/* drop issues without an absolute URL */
+	issues = pk_update_detail_get_issues (item);
+	if (issues != NULL) {
+		g_autoptr(GPtrArray) valid = g_ptr_array_new_with_free_func (
+		    (GDestroyNotify) pk_issue_free);
 
-	/* check the dates are not empty */
-	if (issued != NULL && issued[0] == '\0')
-		g_object_set (item, "issued", NULL, NULL);
-	if (updated != NULL && updated[0] == '\0')
-		g_object_set (item, "updated", NULL, NULL);
+		for (guint i = 0; i < issues->len; i++) {
+			PkIssue *issue = g_ptr_array_index (issues, i);
+			const gchar *url = pk_issue_get_url (issue);
+			const gchar *scheme = g_uri_peek_scheme (url);
 
-	/* check the dates are valid */
-	if (issued != NULL && issued[0] != '\0') {
-		datetime = g_date_time_new_from_iso8601 (issued, NULL);
-		if (!datetime)
-			g_warning ("failed to parse issued '%s'", issued);
-		g_clear_pointer (&datetime, g_date_time_unref);
+			if (scheme == NULL || !g_str_has_prefix (scheme, "http")) {
+				g_warning ("dropping issue with invalid URL '%s'", url);
+				continue;
+			}
+
+			g_ptr_array_add (valid, pk_issue_copy (issue));
+		}
+		if (valid->len != issues->len)
+			g_object_set (item, "issues", valid->len > 0 ? valid : NULL, NULL);
 	}
-	if (updated != NULL && updated[0] != '\0') {
-		datetime = g_date_time_new_from_iso8601 (updated, NULL);
-		if (!datetime)
-			g_warning ("failed to parse updated '%s'", updated);
-		g_clear_pointer (&datetime, g_date_time_unref);
+
+	/* check the date is valid */
+	time_issued = pk_update_detail_get_time_issued (item);
+	if (time_issued != NULL && time_issued[0] == '\0') {
+		g_object_set (item, "time-issued", NULL, NULL);
+	} else if (time_issued != NULL) {
+		g_autoptr(GDateTime) datetime = g_date_time_new_from_iso8601 (time_issued, NULL);
+		if (datetime == NULL)
+			g_warning ("failed to parse time-issued '%s'", time_issued);
 	}
 }
 
@@ -1366,13 +1709,14 @@ pk_backend_job_details (PkBackendJob *job,
 
 /**
  * pk_backend_job_files:
- *
- * @package_id is %NULL when we are using this as a calback from DownloadPackages
+ * @package_id: the package, or %NULL as a callback from DownloadPackages
+ * @files: (element-type PkFile): the entries
  **/
 void
-pk_backend_job_files (PkBackendJob *job, const gchar *package_id, gchar **files)
+pk_backend_job_files (PkBackendJob *job, const gchar *package_id, GPtrArray *files)
 {
 	g_autoptr(PkFiles) item = NULL;
+	g_autoptr(GPtrArray) entries = NULL;
 
 	g_return_if_fail (PK_IS_BACKEND_JOB (job));
 	g_return_if_fail (files != NULL);
@@ -1391,9 +1735,31 @@ pk_backend_job_files (PkBackendJob *job, const gchar *package_id, gchar **files)
 		}
 	}
 
+	entries = g_ptr_array_new_full (files->len, (GDestroyNotify) pk_file_free);
+	for (guint i = 0; i < files->len; i++) {
+		PkFile *file = g_ptr_array_index (files, i);
+		const gchar *path = pk_file_get_path (file);
+
+		if (pk_file_get_kind (file) != PK_FILE_KIND_ENUM_UNKNOWN) {
+			g_ptr_array_add (entries, pk_file_copy (file));
+			continue;
+		} else {
+			gsize len = strlen (path);
+			if (len > 1 && path[len - 1] == '/') {
+				g_autofree gchar *stripped = g_strndup (path, len - 1);
+				g_ptr_array_add (
+				    entries,
+				    pk_file_new (stripped, PK_FILE_KIND_ENUM_DIRECTORY));
+				continue;
+			}
+		}
+
+		g_ptr_array_add (entries, pk_file_copy (file));
+	}
+
 	/* form PkFiles struct */
 	item = pk_files_new ();
-	g_object_set (item, "package-id", package_id, "files", files, NULL);
+	g_object_set (item, "package-id", package_id, "files", entries, NULL);
 
 	/* emit */
 	pk_backend_job_call_vfunc (job,
@@ -1771,6 +2137,35 @@ pk_backend_job_finished (PkBackendJob *job)
 				   NULL);
 }
 
+/**
+ * pk_backend_job_remove_files:
+ *
+ * Close and delete the private copies of the client's files, in case
+ * we are keeping any.
+ */
+static void
+pk_backend_job_remove_files (PkBackendJob *job)
+{
+	gint n_fds = 0;
+
+	if (job->file_fds != NULL)
+		n_fds = g_unix_fd_list_get_length (job->file_fds);
+	for (gint i = 0; i < n_fds; i++) {
+		if (job->files[i].fd >= 0)
+			close (job->files[i].fd);
+		g_free (job->files[i].path);
+	}
+	g_clear_pointer (&job->files, g_free);
+	if (job->staging_dir != NULL) {
+		pk_directory_remove_contents (job->staging_dir);
+		g_rmdir (job->staging_dir);
+	}
+	g_clear_pointer (&job->staging_dir, g_free);
+	g_clear_pointer (&job->staging_root, g_free);
+	g_clear_pointer (&job->file_mime_types, g_strfreev);
+	g_clear_object (&job->file_fds);
+}
+
 static void
 pk_backend_job_finalize (GObject *object)
 {
@@ -1792,6 +2187,7 @@ pk_backend_job_finalize (GObject *object)
 	g_clear_pointer (&job->cmdline, g_free);
 	g_clear_pointer (&job->locale, g_free);
 	g_clear_pointer (&job->frontend_socket, g_free);
+	pk_backend_job_remove_files (job);
 	g_clear_pointer (&job->emitted, g_hash_table_unref);
 	g_clear_pointer (&job->params, g_variant_unref);
 	g_clear_pointer (&job->timer, g_timer_destroy);

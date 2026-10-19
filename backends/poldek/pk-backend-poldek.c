@@ -1187,15 +1187,6 @@ poldek_pkg_is_devel (struct pkg *pkg)
 	return FALSE;
 }
 
-static gboolean
-poldek_pkg_is_gui (struct pkg *pkg)
-{
-	if (g_str_has_prefix (pkg_group (pkg), "X11"))
-		return TRUE;
-
-	return FALSE;
-}
-
 static void
 do_newest (tn_array *pkgs)
 {
@@ -1221,7 +1212,7 @@ do_newest (tn_array *pkgs)
 /**
  * do_filtering:
  *
- * Apply newest, devel and gui filters (if requested).
+ * Apply newest and devel filters (if requested).
  *
  **/
 static void
@@ -1245,18 +1236,6 @@ do_filtering (tn_array *packages, PkBitfield filters)
 
 		if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_DEVELOPMENT))
 			if (poldek_pkg_is_devel (pkg)) {
-				n_array_remove_nth (packages, i);
-				continue;
-			}
-
-		if (pk_bitfield_contain (filters, PK_FILTER_ENUM_GUI))
-			if (!poldek_pkg_is_gui (pkg)) {
-				n_array_remove_nth (packages, i);
-				continue;
-			}
-
-		if (pk_bitfield_contain (filters, PK_FILTER_ENUM_NOT_GUI))
-			if (poldek_pkg_is_gui (pkg)) {
 				n_array_remove_nth (packages, i);
 				continue;
 			}
@@ -2566,7 +2545,6 @@ PkBitfield
 pk_backend_get_filters (PkBackend *backend)
 {
 	return pk_bitfield_from_enums (PK_FILTER_ENUM_NEWEST,
-				       PK_FILTER_ENUM_GUI,
 				       PK_FILTER_ENUM_INSTALLED,
 				       PK_FILTER_ENUM_DEVELOPMENT,
 				       -1);
@@ -2625,16 +2603,17 @@ backend_download_packages_thread (PkBackendJob *job, GVariant *params, gpointer 
 			struct pkg *pkg = n_array_nth (pkgs, i);
 			gchar *package_id;
 			gchar *path;
-			gchar *to_strv[] = { NULL, NULL };
+			g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func (
+			    (GDestroyNotify) pk_file_free);
 			gchar buf[256];
 
 			package_id = package_id_from_pkg (pkg, NULL, PK_FILTER_ENUM_NONE);
 			path = g_build_filename (destdir,
 						 pkg_filename (pkg, buf, sizeof (buf)),
 						 NULL);
-			to_strv[0] = path;
+			g_ptr_array_add (files, pk_file_new (path, PK_FILE_KIND_ENUM_REGULAR));
 
-			pk_backend_job_files (job, package_id, to_strv);
+			pk_backend_job_files (job, package_id, files);
 
 			g_free (package_id);
 			g_free (path);
@@ -2655,7 +2634,7 @@ backend_download_packages (PkBackend *backend, PkBackendJob *job)
 }
 
 static void
-backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
+backend_get_dependencies_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
 	PkBitfield filters;
 	gboolean recursive;
@@ -2699,13 +2678,13 @@ backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 }
 
 static void
-backend_depends_on (PkBackend *backend, PkBackendJob *job)
+backend_get_dependencies (PkBackend *backend, PkBackendJob *job)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	poldek_backend_set_allow_cancel (job, FALSE, TRUE);
 	pb_error_clean ();
 
-	pk_backend_job_thread_create (job, backend_depends_on_thread, NULL, NULL);
+	pk_backend_job_thread_create (job, backend_get_dependencies_thread, NULL, NULL);
 }
 
 static void
@@ -2790,7 +2769,7 @@ backend_get_files_thread (PkBackendJob *job, GVariant *params, gpointer user_dat
 				continue;
 			}
 
-			files = g_ptr_array_new_with_free_func (g_free);
+			files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
 
 			for (i = 0; i < n_tuple_size (flist->fl); i++) {
 				struct pkgfl_ent *flent = n_tuple_nth (flist->fl, i);
@@ -2810,13 +2789,15 @@ backend_get_files_thread (PkBackendJob *job, GVariant *params, gpointer user_dat
 						fname = g_strdup_printf ("%s/%s",
 									 dirname,
 									 f->basename);
-					g_ptr_array_add (files, fname);
+					g_ptr_array_add (
+					    files,
+					    pk_file_new (fname, PK_FILE_KIND_ENUM_UNKNOWN));
+					g_free (fname);
 				}
 				g_free (dirname);
 			}
 
-			g_ptr_array_add (files, NULL);
-			pk_backend_job_files (job, package_ids[n], (gchar **) files->pdata);
+			pk_backend_job_files (job, package_ids[n], files);
 			g_ptr_array_unref (files);
 
 			pkg_free (pkg);
@@ -2910,7 +2891,7 @@ backend_get_packages (PkBackend *backend, PkBackendJob *job)
 }
 
 static void
-backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
+backend_get_dependents_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
 	struct pkg *pkg;
 	tn_array *reqpkgs, *available, *installed;
@@ -2952,13 +2933,13 @@ backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 }
 
 static void
-backend_required_by (PkBackend *backend, PkBackendJob *job)
+backend_get_dependents (PkBackend *backend, PkBackendJob *job)
 {
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	poldek_backend_set_allow_cancel (job, FALSE, TRUE);
 	pb_error_clean ();
 
-	pk_backend_job_thread_create (job, backend_required_by_thread, NULL, NULL);
+	pk_backend_job_thread_create (job, backend_get_dependents_thread, NULL, NULL);
 }
 
 static GPtrArray *
@@ -3022,7 +3003,7 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 			if (strcmp (pkg->name, parts[PK_PACKAGE_ID_NAME]) == 0) {
 				GPtrArray *obsoletes = NULL;
 				GPtrArray *updates = NULL;
-				GPtrArray *cve_urls = NULL;
+				GPtrArray *issues = NULL;
 				const gchar *changes = NULL;
 				tn_array *cves = NULL;
 				struct pkguinf *upkg_uinf = NULL;
@@ -3040,43 +3021,44 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 					changes = pkguinf_get_changelog (upkg_uinf, pkg->btime);
 				}
 
-				cve_urls = g_ptr_array_new ();
+				issues = g_ptr_array_new_with_free_func (
+				    (GDestroyNotify) pk_issue_free);
 				if ((cves = poldek_pkg_get_cves_from_pld_changelog (upkg,
 										    pkg->btime))) {
 					guint i;
 
 					for (i = 0; i < (guint) n_array_size (cves); i++) {
 						gchar *cve = n_array_nth (cves, i);
+						g_autofree gchar *url = g_strdup_printf (
+						    "https://www.cve.org/CVERecord?id=%s",
+						    cve);
 
 						g_ptr_array_add (
-						    cve_urls,
-						    g_strdup_printf ("http://web.nvd.nist.gov/view/"
-								     "vuln/detail?vulnId=%s",
-								     cve));
+						    issues,
+						    pk_issue_new (PK_ISSUE_KIND_ENUM_CVE,
+								  url,
+								  cve,
+								  NULL));
 					}
 				}
 
 				g_ptr_array_add (updates, NULL);
 				g_ptr_array_add (obsoletes, NULL);
-				g_ptr_array_add (cve_urls, NULL);
 
 				item = pk_update_detail_new_full (package_ids[n],
 								  (gchar **) updates->pdata,
 								  (gchar **) obsoletes->pdata,
-								  NULL, // vendor urls
-								  NULL, // bugzilla urls
-								  (gchar **) cve_urls->pdata,
+								  issues,
 								  PK_RESTART_ENUM_NONE,
 								  "", // update text
 								  changes,
 								  PK_UPDATE_STATE_ENUM_UNKNOWN,
-								  NULL,	 // issued
-								  NULL); // updated
+								  NULL); // time issued
 				g_ptr_array_add (update_details, item);
 
 				g_ptr_array_unref (updates);
 				g_ptr_array_unref (obsoletes);
-				g_ptr_array_unref (cve_urls);
+				g_ptr_array_unref (issues);
 
 				n_array_cfree (&cves);
 			}
@@ -3224,14 +3206,6 @@ backend_install_packages_thread (PkBackendJob *job, GVariant *params, gpointer u
 static void
 backend_install_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags)
 {
-	if (!pk_backend_is_online (backend)) {
-		pk_backend_job_error_code (job,
-					   PK_ERROR_ENUM_NO_NETWORK,
-					   "Cannot install package when offline!");
-		pk_backend_job_finished (job);
-		return;
-	}
-
 	poldek_backend_set_allow_cancel (job, TRUE, TRUE);
 	pb_error_clean ();
 
@@ -3294,14 +3268,6 @@ backend_refresh_cache_thread (PkBackendJob *job, GVariant *params, gpointer user
 static void
 backend_refresh_cache (PkBackend *backend, PkBackendJob *job)
 {
-	if (!pk_backend_is_online (backend)) {
-		pk_backend_job_error_code (job,
-					   PK_ERROR_ENUM_NO_NETWORK,
-					   "Cannot refresh cache when offline!");
-		pk_backend_job_finished (job);
-		return;
-	}
-
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_REFRESH_CACHE);
 	poldek_backend_set_allow_cancel (job, TRUE, TRUE);
 	pb_error_clean ();
@@ -3388,14 +3354,6 @@ backend_search (PkBackend *backend, PkBackendJob *job)
 static void
 backend_update_packages (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags)
 {
-	if (!pk_backend_is_online (backend)) {
-		pk_backend_job_error_code (job,
-					   PK_ERROR_ENUM_NO_NETWORK,
-					   "Cannot update packages when offline!");
-		pk_backend_job_finished (job);
-		return;
-	}
-
 	poldek_backend_set_allow_cancel (job, TRUE, TRUE);
 	pb_error_clean ();
 
@@ -3463,11 +3421,11 @@ pk_backend_get_roles (PkBackend *backend)
 {
 	return pk_bitfield_from_enums (PK_ROLE_ENUM_CANCEL,
 				       PK_ROLE_ENUM_DOWNLOAD_PACKAGES,
-				       PK_ROLE_ENUM_DEPENDS_ON,
+				       PK_ROLE_ENUM_GET_DEPENDENCIES,
 				       PK_ROLE_ENUM_GET_DETAILS,
 				       PK_ROLE_ENUM_GET_FILES,
 				       PK_ROLE_ENUM_GET_PACKAGES,
-				       PK_ROLE_ENUM_REQUIRED_BY,
+				       PK_ROLE_ENUM_GET_DEPENDENTS,
 				       PK_ROLE_ENUM_GET_UPDATE_DETAIL,
 				       PK_ROLE_ENUM_GET_UPDATES,
 				       PK_ROLE_ENUM_INSTALL_PACKAGES,
@@ -3496,8 +3454,8 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
 	case PK_ROLE_ENUM_DOWNLOAD_PACKAGES:
 		backend_download_packages (backend, job);
 		break;
-	case PK_ROLE_ENUM_DEPENDS_ON:
-		backend_depends_on (backend, job);
+	case PK_ROLE_ENUM_GET_DEPENDENCIES:
+		backend_get_dependencies (backend, job);
 		break;
 	case PK_ROLE_ENUM_GET_DETAILS:
 		backend_get_details (backend, job);
@@ -3508,8 +3466,8 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
 	case PK_ROLE_ENUM_GET_PACKAGES:
 		backend_get_packages (backend, job);
 		break;
-	case PK_ROLE_ENUM_REQUIRED_BY:
-		backend_required_by (backend, job);
+	case PK_ROLE_ENUM_GET_DEPENDENTS:
+		backend_get_dependents (backend, job);
 		break;
 	case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
 		backend_get_update_detail (backend, job);

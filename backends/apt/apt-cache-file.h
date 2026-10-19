@@ -106,13 +106,6 @@ public:
     bool isGarbage(const pkgCache::PkgIterator &pkg);
 
     /**
-     * DoAutomaticRemove - Remove all automatic unused packages
-     *
-     * Remove unused automatic packages
-     */
-    bool doAutomaticRemove();
-
-    /**
      * Checks if there are Essential packages marked to be removed
      */
     bool isRemovingEssentialPackages();
@@ -159,14 +152,13 @@ public:
      */
     std::string getLongDescriptionParsed(const pkgCache::VerIterator &ver);
 
-    bool tryToInstall(
-        pkgProblemResolver &Fix,
-        const PkgInfo &pki,
-        bool autoInst,
-        bool preserveAuto,
-        bool fixBroken = false);
+    /**
+     * Mark the package for installation, flagged according to pki.mode,
+     * and protect it from the problem resolver.
+     */
+    bool tryToInstall(pkgProblemResolver &Fix, const PkgInfo &pki, bool autoInst, bool fixBroken = false);
 
-    void tryToRemove(pkgProblemResolver &Fix, const PkgInfo &pki);
+    void tryToRemove(pkgProblemResolver &Fix, const PkgInfo &pki, bool purge = false);
 
 private:
     void buildPkgRecords();

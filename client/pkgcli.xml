@@ -198,7 +198,7 @@
         </listitem>
       </varlistentry>
       <varlistentry>
-        <term><command>list-depends</command></term>
+        <term><command>list-dependencies</command>, <command>list-deps</command></term>
         <listitem>
           <para>
             List all packages that the specified package depends on.
@@ -208,7 +208,7 @@
         </listitem>
       </varlistentry>
       <varlistentry>
-        <term><command>list-requiring</command></term>
+        <term><command>list-requiring</command>, <command>list-rdeps</command></term>
         <listitem>
           <para>
             List packages that depend on or require the specified package.
@@ -310,9 +310,11 @@
         <listitem>
           <para>
             Remove one or more installed packages from the system. This may also
-            remove dependent packages if they are no longer needed.
-            Use with the <literal>--autoremove</literal> option to clean up unused
-            packages as well.
+            remove dependent packages if they are no longer needed. Unused
+            dependencies are removed as well unless <literal>--no-autoremove</literal>
+            is given. Use <literal>--purge</literal> to also delete residual data
+            such as configuration files; this also accepts packages that are not
+            installed anymore but still have residual data left.
           </para>
         </listitem>
       </varlistentry>
@@ -321,7 +323,9 @@
         <listitem>
           <para>
             Install available updates for all installed packages on the system,
-            or for specific packages if specified as arguments.
+            or for specific packages if specified as arguments. With
+            <literal>--purge</literal>, residual data of packages removed by the
+            update is deleted as well.
           </para>
         </listitem>
       </varlistentry>
@@ -568,7 +572,7 @@
         <term>List dependencies of a package</term>
         <listitem>
           <para>
-            <command>pkgcli list-depends inkscape</command>
+            <command>pkgcli list-dependencies inkscape</command>
           </para>
         </listitem>
       </varlistentry>

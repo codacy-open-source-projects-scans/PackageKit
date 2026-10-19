@@ -19,7 +19,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_CLIENT_SYNC_H
@@ -115,21 +115,23 @@ PkResults  *pk_client_get_updates (PkClient	     *client,
 				   gpointer	      progress_user_data,
 				   GError	    **error);
 
-PkResults  *pk_client_get_old_transactions (PkClient	      *client,
-					    guint	       number,
-					    GCancellable      *cancellable,
-					    PkProgressCallback progress_callback,
-					    gpointer	       progress_user_data,
-					    GError	     **error);
+PkResults  *pk_client_get_history (PkClient	     *client,
+				   PkBitfield	      flags,
+				   guint	      count,
+				   gchar	    **names,
+				   GCancellable	     *cancellable,
+				   PkProgressCallback progress_callback,
+				   gpointer	      progress_user_data,
+				   GError	    **error);
 
-PkResults  *pk_client_depends_on (PkClient	    *client,
-				  PkBitfield	     filters,
-				  gchar		   **package_ids,
-				  gboolean	     recursive,
-				  GCancellable	    *cancellable,
-				  PkProgressCallback progress_callback,
-				  gpointer	     progress_user_data,
-				  GError	   **error);
+PkResults  *pk_client_get_dependencies (PkClient	  *client,
+					PkBitfield	   filters,
+					gchar		 **package_ids,
+					gboolean	   recursive,
+					GCancellable	  *cancellable,
+					PkProgressCallback progress_callback,
+					gpointer	   progress_user_data,
+					GError		 **error);
 
 PkResults  *pk_client_get_packages (PkClient	      *client,
 				    PkBitfield	       filters,
@@ -138,14 +140,14 @@ PkResults  *pk_client_get_packages (PkClient	      *client,
 				    gpointer	       progress_user_data,
 				    GError	     **error);
 
-PkResults  *pk_client_required_by (PkClient	     *client,
-				   PkBitfield	      filters,
-				   gchar	    **package_ids,
-				   gboolean	      recursive,
-				   GCancellable	     *cancellable,
-				   PkProgressCallback progress_callback,
-				   gpointer	      progress_user_data,
-				   GError	    **error);
+PkResults  *pk_client_get_dependents (PkClient		*client,
+				      PkBitfield	 filters,
+				      gchar	       **package_ids,
+				      gboolean		 recursive,
+				      GCancellable	*cancellable,
+				      PkProgressCallback progress_callback,
+				      gpointer		 progress_user_data,
+				      GError	       **error);
 
 PkResults  *pk_client_what_provides (PkClient	       *client,
 				     PkBitfield		filters,

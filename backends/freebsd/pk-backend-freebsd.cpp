@@ -472,12 +472,12 @@ PkBitfield
 pk_backend_get_roles (PkBackend *backend)
 {
     return pk_bitfield_from_enums (PK_ROLE_ENUM_CANCEL,
-        PK_ROLE_ENUM_DEPENDS_ON,
+        PK_ROLE_ENUM_GET_DEPENDENCIES,
         PK_ROLE_ENUM_GET_DETAILS_LOCAL,
         PK_ROLE_ENUM_GET_FILES_LOCAL,
         PK_ROLE_ENUM_GET_DETAILS,
         PK_ROLE_ENUM_GET_FILES,
-        PK_ROLE_ENUM_REQUIRED_BY,
+        PK_ROLE_ENUM_GET_DEPENDENTS,
         PK_ROLE_ENUM_GET_UPDATE_DETAIL,
         PK_ROLE_ENUM_GET_UPDATES,
         PK_ROLE_ENUM_INSTALL_PACKAGES,
@@ -520,13 +520,13 @@ pk_backend_cancel (PkBackend *backend, PkBackendJob *job)
 }
 
 static void
-pk_freebsd_depends_on (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids, gboolean recursive)
+pk_freebsd_get_dependencies (PkBackend *backend, PkBackendJob *job, PkBitfield filters, gchar **package_ids, gboolean recursive)
 {
     PKJobFinisher jf (job);
 
     // TODO
     if (recursive)
-        g_warning ("depends_on: recursive is not yet supported");
+        g_warning ("get_dependencies: recursive is not yet supported");
 
     pkgdb_t db_type = PKGDB_MAYBE_REMOTE;
     // Open the local DB only when filters require only installed packages
@@ -577,18 +577,21 @@ pk_freebsd_depends_on (PkBackend *backend, PkBackendJob *job, PkBitfield filters
 }
 
 static void
-pk_freebsd_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **files)
+pk_freebsd_get_details_local (PkBackend *backend, PkBackendJob *job, GVariant *handles)
 {
     PKJobFinisher jf (job);
     pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 
-    guint size = g_strv_length (files);
-    for (guint i = 0; i < size; i++) {
-        int fd;
-        if ((fd = open(files[i], O_RDONLY)) == -1) {
+    gsize size = 0;
+    auto h = static_cast<const gint32 *>(g_variant_get_fixed_array (handles, &size, sizeof (gint32)));
+    for (gsize i = 0; i < size; i++) {
+        // the job owns the fd and the checked copy behind it
+        g_autoptr(GError) file_error = nullptr;
+        int fd = pk_backend_job_get_file_fd (job, h[i], &file_error);
+        if (fd == -1) {
             pk_backend_job_error_code (job,
-                        PK_ERROR_ENUM_FILE_NOT_FOUND,
-                        "Unable to open file %s", files[i]);
+                        PK_ERROR_ENUM_INVALID_PACKAGE_FILE,
+                        "%s", file_error->message);
             return;
         }
 
@@ -596,8 +599,7 @@ pk_freebsd_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **fil
         if (pkg_open_fd(&pkg, fd, 0) != EPKG_OK) {
             pk_backend_job_error_code (job,
                         PK_ERROR_ENUM_INVALID_PACKAGE_FILE,
-                        "Invalid or broken package file %s", files[i]);
-            close(fd);
+                        "Invalid or broken package file %d", h[i]);
             return;
         }
 
@@ -612,7 +614,6 @@ pk_freebsd_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **fil
                                 pkgView.flatsize(),
                                 pkgView.compressedsize()); // TODO: check if already downloaded
 
-        close(fd);
         pkg_free(pkg);
     }
 }
@@ -713,18 +714,18 @@ pk_freebsd_get_update_detail (PkBackend *backend, PkBackendJob *job, gchar **pac
     updates.push_back(nullptr);
     obsoletes.push_back(nullptr);
 
-    // We have no vendor/bugzilla/CVE URLs, update text, changelog or dates
+    // We have no issue references, update text, changelog or dates
     // to report, so those properties are left at their defaults.
     g_autoptr(GPtrArray) update_details = g_ptr_array_new_with_free_func (g_object_unref);
     for (guint i = 0; i < size; i++) {
         PkUpdateDetail* item = pk_update_detail_new_full (package_ids[i],
                                                           updates.data(),
                                                           obsoletes.data(),
-                                                          nullptr, nullptr, nullptr,
+                                                          nullptr,
                                                           PK_RESTART_ENUM_NONE,
                                                           nullptr, nullptr,
                                                           PK_UPDATE_STATE_ENUM_UNKNOWN,
-                                                          nullptr, nullptr);
+                                                          nullptr);
         g_ptr_array_add (update_details, item);
     }
 
@@ -794,11 +795,6 @@ pk_backend_install_update_packages_thread (PkBackendJob *job, GVariant *params, 
     bool installRole = pk_backend_job_get_role (job) == PK_ROLE_ENUM_INSTALL_PACKAGES;
 
     PKJobCanceller jc (job);
-
-    if (!pk_backend_is_online (reinterpret_cast<PkBackend*>(pk_backend_job_get_backend (job)))) {
-        pk_backend_job_error_code (job, PK_ERROR_ENUM_NO_NETWORK, "Cannot update packages when offline");
-        return;
-    }
 
     PkBitfield transaction_flags;
     gchar **package_ids = NULL;
@@ -949,11 +945,6 @@ static void
 pk_backend_refresh_cache_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
     PKJobCanceller jc (job);
-
-    if (!pk_backend_is_online (reinterpret_cast<PkBackend*>(pk_backend_job_get_backend (job)))) {
-        pk_backend_job_error_code (job, PK_ERROR_ENUM_NO_NETWORK, "Cannot update repositories when offline");
-        return;
-    }
 
     gboolean force;
     g_variant_get (params, "(b)", &force);
@@ -1239,11 +1230,6 @@ pk_backend_download_packages_thread (PkBackendJob *job, GVariant *params, gpoint
 
     // GOS-394: Check the cache first
 
-    if (!pk_backend_is_online (reinterpret_cast<PkBackend*>(pk_backend_job_get_backend (job)))) {
-        pk_backend_job_error_code (job, PK_ERROR_ENUM_NO_NETWORK, "Cannot download packages when offline");
-        return;
-    }
-
     gchar **package_ids = NULL;
     gchar *directory0 = NULL;
     g_variant_get (params, "(^ass)", // he he
@@ -1317,8 +1303,8 @@ pk_backend_download_packages_thread (PkBackendJob *job, GVariant *params, gpoint
                     ? cacheDir + "/" + pkg_namever + ".pkg"
                     : directory + "/All/" + pkg_namever + ".pkg";
 
-        gchar* files[] = {NULL, NULL};
-        files[0] = const_cast<gchar*>(filepath.c_str());
+        g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func((GDestroyNotify)pk_file_free);
+        g_ptr_array_add(files, pk_file_new(filepath.c_str(), PK_FILE_KIND_ENUM_REGULAR));
         pk_backend_job_files(job, pkg.packageKitId(), files);
 
         if (jc.cancelIfRequested())
@@ -1346,20 +1332,20 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
     GVariant *params = pk_backend_job_get_parameters (job);
 
     switch (role) {
-    case PK_ROLE_ENUM_DEPENDS_ON:
+    case PK_ROLE_ENUM_GET_DEPENDENCIES:
     {
         PkBitfield filters;
         g_autofree gchar **package_ids = NULL;
         gboolean recursive;
         g_variant_get (params, "(t^a&sb)", &filters, &package_ids, &recursive);
-        pk_freebsd_depends_on (backend, job, filters, package_ids, recursive);
+        pk_freebsd_get_dependencies (backend, job, filters, package_ids, recursive);
         break;
     }
     case PK_ROLE_ENUM_GET_DETAILS_LOCAL:
     {
-        g_autofree gchar **files = NULL;
-        g_variant_get (params, "(^a&s)", &files);
-        pk_freebsd_get_details_local (backend, job, files);
+        g_autoptr(GVariant) handles = NULL;
+        g_variant_get (params, "(@ah)", &handles);
+        pk_freebsd_get_details_local (backend, job, handles);
         break;
     }
     case PK_ROLE_ENUM_GET_FILES_LOCAL:
@@ -1375,8 +1361,8 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
     case PK_ROLE_ENUM_GET_FILES:
         g_error("pk_backend_get_files not implemented yet");
         break;
-    case PK_ROLE_ENUM_REQUIRED_BY:
-        g_error("pk_backend_required_by not implemented yet");
+    case PK_ROLE_ENUM_GET_DEPENDENTS:
+        g_error("pk_backend_get_dependents not implemented yet");
         break;
     case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
     {
@@ -1394,10 +1380,6 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
     }
     case PK_ROLE_ENUM_INSTALL_PACKAGES:
         // No need for PKJobFinisher here as we are using pk_backend_job_thread_create
-        if (!pk_backend_is_online (reinterpret_cast<PkBackend*>(pk_backend_job_get_backend (job)))) {
-            pk_backend_job_error_code (job, PK_ERROR_ENUM_NO_NETWORK, "Cannot install packages when offline");
-            break;
-        }
         pk_backend_job_thread_create (job, pk_backend_install_update_packages_thread, NULL, NULL);
         break;
     case PK_ROLE_ENUM_INSTALL_SIGNATURE:

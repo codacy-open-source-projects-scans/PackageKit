@@ -19,18 +19,20 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_COMMON_PRIVATE_H
 #define __PK_COMMON_PRIVATE_H
 
 #include <glib.h>
+#include <gio/gunixfdlist.h>
 
 G_BEGIN_DECLS
 
-gchar *pk_get_distro_name (GError **error);
-gchar *pk_get_distro_version_id (GError **error);
+gchar	 *pk_get_distro_name (GError **error);
+gchar	 *pk_get_distro_version_id (GError **error);
+GVariant *pk_unix_fd_list_get_handles (GUnixFDList *fd_list);
 
 G_END_DECLS
 

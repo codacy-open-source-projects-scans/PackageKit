@@ -1,6 +1,6 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
- * Copyright (C) 2012-2025 Matthias Klumpp <matthias@tenstral.net>
+ * Copyright (C) 2012-2026 Matthias Klumpp <matthias@tenstral.net>
  * Copyright (C) 2007-2014 Richard Hughes <richard@hughsie.com>
  *
  * Licensed under the GNU General Public License Version 2
@@ -32,6 +32,7 @@ static gboolean opt_allow_downgrade = FALSE;
 static gboolean opt_allow_reinstall = FALSE;
 static gboolean opt_allow_untrusted = FALSE;
 static gboolean opt_no_autoremove = FALSE;
+static gboolean opt_purge = FALSE;
 static gint opt_cache_age = -1;
 
 /* Each option is one record per line; clang-format would put every field
@@ -72,6 +73,13 @@ static const GOptionEntry option_no_autoremove[] = {
 	{ NULL, 0, 0, 0, NULL, NULL, NULL }
 };
 
+static const GOptionEntry option_purge[] = {
+	{ "purge", 0, 0, G_OPTION_ARG_NONE, &opt_purge,
+		/* TRANSLATORS: command line argument, remove configuration files too */
+		N_("Also remove residual data (config files, databases, etc.) when removing packages"), NULL },
+	{ NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
 static const GOptionEntry option_cache_age[] = {
 	{ "cache-age", 'c', 0, G_OPTION_ARG_INT, &opt_cache_age,
 		/* TRANSLATORS: command line argument */
@@ -93,6 +101,7 @@ pkgc_manage_reset_options (void)
 	opt_allow_reinstall = FALSE;
 	opt_allow_untrusted = FALSE;
 	opt_no_autoremove = FALSE;
+	opt_purge = FALSE;
 	opt_cache_age = PKGC_DEFAULT_CACHE_AGE_SEC;
 }
 
@@ -109,12 +118,55 @@ pkgc_manage_apply_options (PkgcliContext *ctx)
 	ctx->allow_downgrade = opt_allow_downgrade;
 	ctx->allow_reinstall = opt_allow_reinstall;
 	ctx->allow_untrusted = opt_allow_untrusted;
+	ctx->purge = opt_purge;
 	if (opt_cache_age == 0)
 		ctx->cache_age = 1; /* shortest possible cache-age, 0 is not allowed */
 	else
 		ctx->cache_age = (opt_cache_age < 0) ? G_MAXUINT : (guint) opt_cache_age;
 
 	pkgc_context_apply_settings (ctx);
+}
+
+/**
+ * pkgc_manage_print_require_restart:
+ *
+ * Tell the user if a restart is needed to complete the changes.
+ */
+static void
+pkgc_manage_print_require_restart (PkgcliContext *ctx, PkResults *results)
+{
+	PkRestartEnum restart = pk_results_get_require_restart_worst (results);
+
+	if (restart <= PK_RESTART_ENUM_NONE)
+		return;
+
+	if (ctx->output_mode == PKGCLI_MODE_JSON) {
+		g_autoptr(json_t) root = json_object ();
+		json_object_set_new (root,
+				     "restart",
+				     json_string (pk_restart_enum_to_string (restart)));
+		pkgc_print_json (root);
+		return;
+	}
+
+	switch (restart) {
+	case PK_RESTART_ENUM_SYSTEM:
+		/* TRANSLATORS: shown after a transaction when the computer needs a reboot */
+		pkgc_print_warning (ctx,
+				    _("A system restart is required to complete the changes."));
+		break;
+	case PK_RESTART_ENUM_SESSION:
+		/* TRANSLATORS: shown after a transaction when the user needs to log out and in again */
+		pkgc_print_warning (ctx,
+				    _("You need to log out and back in to complete the changes."));
+		break;
+	default:
+		/* TRANSLATORS: shown after a transaction when running applications need a restart */
+		pkgc_print_warning (
+		    ctx,
+		    _("Affected applications need to be restarted to complete the changes."));
+		break;
+	}
 }
 
 /**
@@ -162,10 +214,9 @@ pkgc_manage_on_task_finished_cb (GObject *source_object, GAsyncResult *res, gpoi
 		}
 
 		/* show transactions */
-		tas = pk_results_get_transaction_array (results);
+		tas = pk_results_get_history_array (results);
 		for (guint i = 0; i < tas->len; i++) {
-			PkTransactionPast *transaction = PK_TRANSACTION_PAST (
-			    g_ptr_array_index (tas, i));
+			PkHistoryItem *transaction = PK_HISTORY_ITEM (g_ptr_array_index (tas, i));
 			pkgc_print_transaction (ctx, transaction);
 		}
 
@@ -175,6 +226,8 @@ pkgc_manage_on_task_finished_cb (GObject *source_object, GAsyncResult *res, gpoi
 			PkRepoDetail *repo = PK_REPO_DETAIL (g_ptr_array_index (repos, i));
 			pkgc_print_repo (ctx, repo);
 		}
+
+		pkgc_manage_print_require_restart (ctx, results);
 	}
 
 out:
@@ -354,6 +407,62 @@ pkgc_install (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 }
 
 /**
+ * pkgc_remove_resolve_for_purge:
+ *
+ * Resolve names to installed packages, falling back to packages that only
+ * have residual data left. Filters can not express "installed or residual",
+ * so names the first lookup does not find get a second one.
+ */
+static gchar **
+pkgc_remove_resolve_for_purge (PkgcliContext *ctx, gchar **packages, GError **error)
+{
+	g_autoptr(GPtrArray) array = g_ptr_array_new_with_free_func (g_free);
+	PkBitfield residual_filters = ctx->filters;
+
+	pk_bitfield_remove (residual_filters, PK_FILTER_ENUM_INSTALLED);
+	pk_bitfield_add (residual_filters, PK_FILTER_ENUM_RESIDUAL);
+
+	for (guint i = 0; packages[i] != NULL; i++) {
+		g_autoptr(GError) error_local = NULL;
+		gchar *package_id = pkgc_resolve_package (ctx,
+							  ctx->filters,
+							  packages[i],
+							  &error_local);
+
+		if (package_id == NULL &&
+		    g_error_matches (error_local, PKGC_ERROR, PK_ERROR_ENUM_PACKAGE_NOT_FOUND)) {
+			g_clear_error (&error_local);
+			package_id = pkgc_resolve_package (ctx,
+							   residual_filters,
+							   packages[i],
+							   &error_local);
+		}
+		if (package_id == NULL) {
+			if (g_error_matches (error_local,
+					     PKGC_ERROR,
+					     PK_ERROR_ENUM_PACKAGE_NOT_FOUND)) {
+				pkgc_print_warning (ctx, _("Package not found: %s"), packages[i]);
+				continue;
+			}
+			g_propagate_error (error, g_steal_pointer (&error_local));
+			return NULL;
+		}
+		g_ptr_array_add (array, package_id);
+	}
+
+	if (array->len == 0) {
+		g_set_error_literal (error,
+				     PKGC_ERROR,
+				     PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
+				     "No packages were found");
+		return NULL;
+	}
+
+	g_ptr_array_add (array, NULL);
+	return g_strdupv ((gchar **) array->pdata);
+}
+
+/**
  * pkgc_remove:
  *
  * Remove packages from the system.
@@ -375,6 +484,7 @@ pkgc_remove (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 	    /* TRANSLATORS: Description for pkgcli remove */
 	    _("Remove one or more packages from the system."));
 	g_option_context_add_main_entries (option_context, option_no_autoremove, NULL);
+	g_option_context_add_main_entries (option_context, option_purge, NULL);
 
 	if (!pkgc_parse_command_options (ctx, cmd, option_context, &argc, &argv, 2))
 		return PKGC_EXIT_SYNTAX_ERROR;
@@ -386,7 +496,10 @@ pkgc_remove (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 	pk_bitfield_add (ctx->filters, PK_FILTER_ENUM_INSTALLED);
 
 	/* resolve package names to IDs */
-	package_ids = pkgc_resolve_packages (ctx, ctx->filters, argv + 1, &error);
+	if (opt_purge)
+		package_ids = pkgc_remove_resolve_for_purge (ctx, argv + 1, &error);
+	else
+		package_ids = pkgc_resolve_packages (ctx, ctx->filters, argv + 1, &error);
 	if (package_ids == NULL) {
 		if (error) {
 			pkgc_print_error (ctx,
@@ -500,6 +613,7 @@ pkgc_update (PkgcliContext *ctx, PkgcliCommand *cmd, gint argc, gchar **argv)
 	    _("Update all packages or specific packages to their latest versions."));
 	g_option_context_add_main_entries (option_context, option_download_only, NULL);
 	g_option_context_add_main_entries (option_context, option_allow_downgrade, NULL);
+	g_option_context_add_main_entries (option_context, option_purge, NULL);
 
 	if (!pkgc_parse_command_options (ctx, cmd, option_context, &argc, &argv, 1))
 		return PKGC_EXIT_SYNTAX_ERROR;

@@ -26,11 +26,12 @@
 #include <gio/gunixsocketaddress.h>
 
 #include "pk-client.h"
-#include "pk-client-helper.h"
+#include "pk-client-helper-private.h"
 #include "pk-control.h"
 #include "pk-console-private.h"
 #include "pk-offline.h"
 #include "pk-offline-private.h"
+#include "pk-package-id.h"
 #include "pk-package-ids.h"
 #include "pk-results.h"
 #include "pk-task.h"
@@ -281,6 +282,7 @@ pk_test_client_helper_func (void)
 	GSocketAddress *address = NULL;
 	gsize wrote;
 	GSource *source;
+	g_autoptr(GSocket) listen_socket = NULL;
 
 	client_helper = pk_client_helper_new ();
 	g_assert (client_helper != NULL);
@@ -298,15 +300,25 @@ pk_test_client_helper_func (void)
 	/* ensure previous sockets are deleted */
 	g_unlink (filename);
 
+	/* listen like the daemon does */
+	address = g_unix_socket_address_new (filename);
+	listen_socket = g_socket_new (G_SOCKET_FAMILY_UNIX,
+				      G_SOCKET_TYPE_STREAM,
+				      G_SOCKET_PROTOCOL_DEFAULT,
+				      &error);
+	g_assert_no_error (error);
+	g_assert (g_socket_bind (listen_socket, address, TRUE, &error));
+	g_assert (g_socket_listen (listen_socket, &error));
+	g_assert_no_error (error);
+
 	/* start a demo program */
 	ret = pk_client_helper_start (client_helper,
-				      filename,
+				      listen_socket,
 				      (gchar **) argv,
 				      (gchar **) envp,
 				      &error);
 	g_assert_no_error (error);
 	g_assert (ret);
-	g_assert (g_file_test (filename, G_FILE_TEST_EXISTS));
 
 	/* create socket */
 	socket = g_socket_new (G_SOCKET_FAMILY_UNIX,
@@ -319,7 +331,6 @@ pk_test_client_helper_func (void)
 	g_socket_set_keepalive (socket, TRUE);
 
 	/* connect to it */
-	address = g_unix_socket_address_new (filename);
 	ret = g_socket_connect (socket, address, NULL, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
@@ -571,7 +582,7 @@ pk_test_client_download_cb (GObject *object, GAsyncResult *res, gpointer user_da
 	PkFiles *item;
 	GPtrArray *array = NULL;
 	gchar *package_id = NULL;
-	gchar **files = NULL;
+	GPtrArray *files = NULL;
 
 	/* get the results */
 	results = pk_client_generic_finish (client, res, &error);
@@ -589,10 +600,15 @@ pk_test_client_download_cb (GObject *object, GAsyncResult *res, gpointer user_da
 	item = g_ptr_array_index (array, 0);
 	g_object_get (item, "package-id", &package_id, "files", &files, NULL);
 	g_assert_cmpstr (package_id, ==, "powertop-common;1.8-1.fc8;i386;fedora;");
-	g_assert_cmpint (g_strv_length (files), ==, 1);
-	g_assert_cmpstr (files[0], ==, "/tmp/powertop-common-1.8-1.fc8.rpm");
+	g_assert_cmpint (files->len, ==, 1);
+	g_assert_cmpstr (pk_file_get_path (g_ptr_array_index (files, 0)),
+			 ==,
+			 "/tmp/powertop-common-1.8-1.fc8.rpm");
+	g_assert_cmpint (pk_file_get_kind (g_ptr_array_index (files, 0)),
+			 ==,
+			 PK_FILE_KIND_ENUM_REGULAR);
 
-	g_strfreev (files);
+	g_ptr_array_unref (files);
 	g_free (package_id);
 	g_ptr_array_unref (array);
 	if (results != NULL)
@@ -820,6 +836,95 @@ pk_test_client_func (void)
 	g_strfreev (package_ids);
 	_g_test_loop_run_with_timeout (15000);
 
+	/* the dummy backend reported a kernel update, which the daemon must
+	 * remember as a required system restart */
+	{
+		g_autoptr(PkControl) control = pk_control_new ();
+		g_auto(GStrv) restart_ids = NULL;
+		PkRestartEnum restart;
+
+		ret = pk_control_get_properties (control, NULL, &error);
+		g_assert_no_error (error);
+		g_assert_true (ret);
+		g_object_get (control,
+			      "reboot-required",
+			      &restart,
+			      "reboot-required-package-ids",
+			      &restart_ids,
+			      NULL);
+		g_assert_cmpint (restart, ==, PK_RESTART_ENUM_SYSTEM);
+		g_assert_nonnull (restart_ids);
+		g_assert_true (
+		    g_strv_contains ((const gchar *const *) restart_ids,
+				     "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed"));
+	}
+
+	/* the update must now show up in the history, and filter correctly */
+	{
+		g_autoptr(PkResults) results = NULL;
+		g_autoptr(GPtrArray) items = NULL;
+		g_autofree gchar *name = NULL;
+		gchar *names[] = { NULL, NULL };
+		PkHistoryItem *item;
+		GPtrArray *packages;
+
+		results = pk_client_get_history (client, 0, 1, NULL, NULL, NULL, NULL, &error);
+		g_assert_no_error (error);
+		items = pk_results_get_history_array (results);
+		g_assert_cmpint (items->len, ==, 1);
+		item = g_ptr_array_index (items, 0);
+		g_assert_cmpint (pk_history_item_get_role (item), ==, PK_ROLE_ENUM_UPDATE_PACKAGES);
+		packages = pk_history_item_get_packages (item);
+		g_assert_nonnull (packages);
+		g_assert_cmpint (packages->len, >, 0);
+		name = g_strdup (pk_package_get_name (g_ptr_array_index (packages, 0)));
+		g_clear_pointer (&items, g_ptr_array_unref);
+		g_clear_object (&results);
+
+		names[0] = name;
+		results = pk_client_get_history (client, 0, 0, names, NULL, NULL, NULL, &error);
+		g_assert_no_error (error);
+		items = pk_results_get_history_array (results);
+		g_assert_cmpint (items->len, >, 0);
+		for (guint i = 0; i < items->len; i++) {
+			packages = pk_history_item_get_packages (g_ptr_array_index (items, i));
+			for (guint j = 0; j < packages->len; j++)
+				g_assert_cmpstr (
+				    pk_package_get_name (g_ptr_array_index (packages, j)),
+				    ==,
+				    name);
+		}
+		g_clear_pointer (&items, g_ptr_array_unref);
+		g_clear_object (&results);
+
+		results = pk_client_get_history (
+		    client,
+		    pk_bitfield_from_enums (PK_HISTORY_FLAG_ENUM_SUCCEEDED,
+					    PK_HISTORY_FLAG_ENUM_PACKAGE_CHANGES,
+					    -1),
+		    0,
+		    NULL,
+		    NULL,
+		    NULL,
+		    NULL,
+		    &error);
+		g_assert_no_error (error);
+		items = pk_results_get_history_array (results);
+		for (guint i = 0; i < items->len; i++) {
+			item = g_ptr_array_index (items, i);
+			g_assert_true (pk_history_item_get_succeeded (item));
+			packages = pk_history_item_get_packages (item);
+			g_assert_cmpint (packages->len, >, 0);
+			for (guint j = 0; j < packages->len; j++) {
+				PkInfoEnum info = pk_package_get_info (
+				    g_ptr_array_index (packages, j));
+				g_assert_true (info == PK_INFO_ENUM_INSTALLING ||
+					       info == PK_INFO_ENUM_REMOVING ||
+					       info == PK_INFO_ENUM_UPDATING);
+			}
+		}
+	}
+
 	/* ensure previous files are deleted */
 	g_unlink ("/tmp/powertop-1.8-1.fc8.rpm");
 	g_unlink ("/tmp/powertop-common-1.8-1.fc8.rpm");
@@ -879,6 +984,117 @@ cancellation_progress_cb (PkProgress *progress, PkProgressType type, void *user_
 	**tid_out = g_strdup (pk_progress_get_transaction_id (progress));
 
 	g_main_context_wakeup (g_main_context_get_thread_default ());
+}
+
+static void
+pk_test_client_local_files_func (void)
+{
+	PkFiles *item;
+	gchar *files[2] = { NULL, NULL };
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *rpm = NULL;
+	g_autofree gchar *txt = NULL;
+	g_auto(GStrv) split = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) array = NULL;
+	g_autoptr(PkClient) client = pk_client_new ();
+	g_autoptr(PkResults) results = NULL;
+
+	/* the daemon only sees these through the fds we send, so they can live anywhere */
+	dir = g_dir_make_tmp ("pk-test-local-XXXXXX", &error);
+	g_assert_no_error (error);
+	rpm = g_build_filename (dir, "powertop-1.8-1.fc8.rpm", NULL);
+	txt = g_build_filename (dir, "notes.txt", NULL);
+	g_assert_true (g_file_set_contents (rpm, "not really an rpm", -1, &error));
+	g_assert_no_error (error);
+	g_assert_true (g_file_set_contents (txt, "hello", -1, &error));
+	g_assert_no_error (error);
+
+	/* details of a local package file */
+	files[0] = rpm;
+	results = pk_client_get_details_local (client, files, NULL, NULL, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_cmpint (pk_results_get_exit_code (results), ==, PK_EXIT_ENUM_SUCCESS);
+	array = pk_results_get_details_array (results);
+	g_assert_cmpint (array->len, ==, 1);
+	g_clear_pointer (&array, g_ptr_array_unref);
+	g_clear_object (&results);
+
+	/* file list: the dummy backend reports the private copy the daemon handed it */
+	results = pk_client_get_files_local (client, files, NULL, NULL, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_cmpint (pk_results_get_exit_code (results), ==, PK_EXIT_ENUM_SUCCESS);
+	array = pk_results_get_files_array (results);
+	g_assert_cmpint (array->len, ==, 1);
+	item = g_ptr_array_index (array, 0);
+	split = pk_package_id_split (pk_files_get_package_id (item));
+	g_assert_nonnull (split);
+	g_assert_true (g_str_has_suffix (split[PK_PACKAGE_ID_DATA], "/0/powertop-1.8-1.fc8.rpm"));
+	g_assert_nonnull (g_strstr_len (split[PK_PACKAGE_ID_DATA],
+					-1,
+					LOCALSTATEDIR "/cache/packagekit/staging/"));
+	g_assert_cmpstr (split[PK_PACKAGE_ID_DATA], !=, rpm);
+	g_clear_pointer (&array, g_ptr_array_unref);
+	g_clear_object (&results);
+
+	/* install it; the dummy backend takes two seconds */
+	results = pk_client_install_files (client,
+					   pk_bitfield_value (PK_TRANSACTION_FLAG_ENUM_NONE),
+					   files,
+					   NULL,
+					   NULL,
+					   NULL,
+					   &error);
+	g_assert_no_error (error);
+	g_assert_cmpint (pk_results_get_exit_code (results), ==, PK_EXIT_ENUM_SUCCESS);
+	g_clear_object (&results);
+
+	/* not a package file: the job rejects it right before the backend would read it */
+	files[0] = txt;
+	results = pk_client_get_details_local (client, files, NULL, NULL, NULL, &error);
+	g_assert_null (results);
+	g_assert_nonnull (error);
+	g_assert_nonnull (g_strstr_len (error->message, -1, "unsupported content type"));
+	g_clear_error (&error);
+
+	/* a file we cannot open never reaches the daemon */
+	files[0] = (gchar *) "/nonexistent/foo.rpm";
+	results = pk_client_get_details_local (client, files, NULL, NULL, NULL, &error);
+	g_assert_null (results);
+	g_assert_error (error, PK_CLIENT_ERROR, PK_CLIENT_ERROR_INVALID_INPUT);
+
+	g_unlink (rpm);
+	g_unlink (txt);
+	g_rmdir (dir);
+}
+
+/* the purge flag is a removal modifier: rejected for installs, passed on for removals */
+static void
+pk_test_client_purge_flag_func (void)
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(PkClient) client = pk_client_new ();
+	g_autoptr(PkResults) results = NULL;
+	g_auto(GStrv) package_ids = pk_package_ids_from_string ("powertop;1.8-1.fc8;i386;fedora;");
+	const PkBitfield purge = pk_bitfield_value (PK_TRANSACTION_FLAG_ENUM_PURGE);
+
+	results = pk_client_install_packages (client, purge, package_ids, NULL, NULL, NULL, &error);
+	g_assert_error (error, PK_CLIENT_ERROR, PK_CLIENT_ERROR_NOT_SUPPORTED);
+	g_assert_null (results);
+	g_clear_error (&error);
+
+	/* the dummy backend ignores the flag and fails its removal the usual way */
+	results = pk_client_remove_packages (client,
+					     purge,
+					     package_ids,
+					     TRUE,
+					     FALSE,
+					     NULL,
+					     NULL,
+					     NULL,
+					     &error);
+	g_assert_nonnull (error);
+	g_assert_nonnull (strstr (error->message, "No network"));
 }
 
 static void
@@ -1050,21 +1266,22 @@ pk_test_control_get_properties_cb (GObject *object, GAsyncResult *res, gpointer 
 
 	/* check roles */
 	text = pk_role_bitfield_to_string (roles);
-	g_assert_cmpstr (text,
-			 ==,
-			 "cancel;depends-on;get-details;get-files;get-packages;get-repo-list;"
-			 "required-by;get-update-detail;get-updates;install-files;install-packages;"
-			 "install-signature;"
-			 "refresh-cache;remove-packages;repo-enable;repo-set-data;resolve;"
-			 "search-details;search-file;search-group;search-name;update-packages;"
-			 "what-provides;download-packages;get-distro-upgrades;"
-			 "get-old-transactions;repair-system;get-details-local;"
-			 "get-files-local;upgrade-system");
+	g_assert_cmpstr (
+	    text,
+	    ==,
+	    "cancel;get-dependencies;get-details;get-files;get-packages;get-repo-list;"
+	    "get-dependents;get-update-detail;get-updates;install-files;install-packages;"
+	    "install-signature;"
+	    "refresh-cache;remove-packages;repo-enable;repo-set-data;resolve;"
+	    "search-details;search-file;search-group;search-name;update-packages;"
+	    "what-provides;download-packages;get-distro-upgrades;"
+	    "get-history;repair-system;get-details-local;"
+	    "get-files-local;upgrade-system");
 	g_free (text);
 
 	/* check filters */
 	text = pk_filter_bitfield_to_string (filters);
-	g_assert_cmpstr (text, ==, "installed;devel;gui");
+	g_assert_cmpstr (text, ==, "installed;devel;application");
 	g_free (text);
 
 	/* check groups */
@@ -1230,16 +1447,17 @@ pk_test_control_func (void)
 
 	/* check data */
 	text = pk_role_bitfield_to_string (roles);
-	g_assert_cmpstr (text,
-			 ==,
-			 "cancel;depends-on;get-details;get-files;get-packages;get-repo-list;"
-			 "required-by;get-update-detail;get-updates;install-files;install-packages;"
-			 "install-signature;"
-			 "refresh-cache;remove-packages;repo-enable;repo-set-data;resolve;"
-			 "search-details;search-file;search-group;search-name;update-packages;"
-			 "what-provides;download-packages;get-distro-upgrades;"
-			 "get-old-transactions;repair-system;get-details-local;"
-			 "get-files-local;upgrade-system");
+	g_assert_cmpstr (
+	    text,
+	    ==,
+	    "cancel;get-dependencies;get-details;get-files;get-packages;get-repo-list;"
+	    "get-dependents;get-update-detail;get-updates;install-files;install-packages;"
+	    "install-signature;"
+	    "refresh-cache;remove-packages;repo-enable;repo-set-data;resolve;"
+	    "search-details;search-file;search-group;search-name;update-packages;"
+	    "what-provides;download-packages;get-distro-upgrades;"
+	    "get-history;repair-system;get-details-local;"
+	    "get-files-local;upgrade-system");
 	g_free (text);
 
 	g_object_unref (control);
@@ -1308,7 +1526,8 @@ pk_test_package_sack_func (void)
 	PkPackageSack *sack;
 	PkPackage *package;
 	gchar *text;
-	gchar **strv;
+	GPtrArray *issues;
+	PkIssue *issue;
 	guint size;
 	PkInfoEnum info = PK_INFO_ENUM_UNKNOWN;
 	guint64 bytes;
@@ -1395,11 +1614,20 @@ pk_test_package_sack_func (void)
 	package = pk_package_sack_find_by_id (sack, "powertop;1.8-1.fc8;i386;fedora;");
 	g_assert (package != NULL);
 
-	/* check new vendor url */
-	g_object_get (package, "update-vendor-urls", &strv, NULL);
-	g_assert (strv != NULL);
-	g_assert_cmpstr (strv[0], ==, "http://www.distro-update.org/page?moo");
-	g_strfreev (strv);
+	/* check the issue references survived the round trip */
+	g_object_get (package, "update-issues", &issues, NULL);
+	g_assert_nonnull (issues);
+	g_assert_cmpuint (issues->len, ==, 2);
+	issue = g_ptr_array_index (issues, 0);
+	g_assert_cmpint (pk_issue_get_kind (issue), ==, PK_ISSUE_KIND_ENUM_ADVISORY);
+	g_assert_cmpstr (pk_issue_get_url (issue), ==, "http://www.distro-update.org/page?moo");
+	g_assert_null (pk_issue_get_id (issue));
+	g_assert_null (pk_issue_get_title (issue));
+	issue = g_ptr_array_index (issues, 1);
+	g_assert_cmpint (pk_issue_get_kind (issue), ==, PK_ISSUE_KIND_ENUM_GENERIC);
+	g_assert_cmpstr (pk_issue_get_id (issue), ==, "12344");
+	g_assert_cmpstr (pk_issue_get_title (issue), ==, "crash on startup");
+	g_ptr_array_unref (issues);
 
 	g_object_unref (package);
 
@@ -1499,11 +1727,11 @@ pk_test_task_text_install_packages_cb (GObject *object, GAsyncResult *res, gpoin
 	exit_enum = pk_results_get_exit_code (results);
 	g_assert_cmpint (exit_enum, ==, PK_EXIT_ENUM_SUCCESS);
 
-	/* downloading gtkhtml2, installing gtkhtml2, installing gtkhtml2-devel;
+	/* installing gtkhtml2 (replacing downloading) and installing gtkhtml2-devel;
 	 * the duplicate emission of gtkhtml2-devel is dropped by the daemon */
 	packages = pk_results_get_package_array (results);
 	g_assert (packages != NULL);
-	g_assert_cmpint (packages->len, ==, 3);
+	g_assert_cmpint (packages->len, ==, 2);
 
 	g_ptr_array_unref (packages);
 
@@ -1571,11 +1799,11 @@ pk_test_task_wrapper_install_packages_cb (GObject *object, GAsyncResult *res, gp
 	exit_enum = pk_results_get_exit_code (results);
 	g_assert_cmpint (exit_enum, ==, PK_EXIT_ENUM_SUCCESS);
 
-	/* downloading gtkhtml2, installing gtkhtml2, installing gtkhtml2-devel;
+	/* installing gtkhtml2 (replacing downloading) and installing gtkhtml2-devel;
 	 * the duplicate emission of gtkhtml2-devel is dropped by the daemon */
 	packages = pk_results_get_package_array (results);
 	g_assert (packages != NULL);
-	g_assert_cmpint (packages->len, ==, 3);
+	g_assert_cmpint (packages->len, ==, 2);
 
 	g_ptr_array_unref (packages);
 
@@ -1769,17 +1997,19 @@ main (int argc, char **argv)
 	pk_test_apply_root_dir ();
 
 	/* tests go here */
-	g_test_add_func ("/packagekit-glib2/offline", pk_test_offline_func);
-	g_test_add_func ("/packagekit-glib2/control", pk_test_control_func);
-	g_test_add_func ("/packagekit-glib2/transaction-list", pk_test_transaction_list_func);
-	g_test_add_func ("/packagekit-glib2/client-helper", pk_test_client_helper_func);
-	g_test_add_func ("/packagekit-glib2/client", pk_test_client_func);
-	g_test_add_func ("/packagekit-glib2/client/cancellation", pk_test_client_cancellation_func);
-	g_test_add_func ("/packagekit-glib2/package-sack", pk_test_package_sack_func);
-	g_test_add_func ("/packagekit-glib2/task", pk_test_task_func);
-	g_test_add_func ("/packagekit-glib2/task-wrapper", pk_test_task_wrapper_func);
-	g_test_add_func ("/packagekit-glib2/task-text", pk_test_task_text_func);
-	g_test_add_func ("/packagekit-glib2/console", pk_test_console_func);
+	g_test_add_func ("/libpackagekit/offline", pk_test_offline_func);
+	g_test_add_func ("/libpackagekit/control", pk_test_control_func);
+	g_test_add_func ("/libpackagekit/transaction-list", pk_test_transaction_list_func);
+	g_test_add_func ("/libpackagekit/client-helper", pk_test_client_helper_func);
+	g_test_add_func ("/libpackagekit/client", pk_test_client_func);
+	g_test_add_func ("/libpackagekit/client/cancellation", pk_test_client_cancellation_func);
+	g_test_add_func ("/libpackagekit/client/local-files", pk_test_client_local_files_func);
+	g_test_add_func ("/libpackagekit/client/purge-flag", pk_test_client_purge_flag_func);
+	g_test_add_func ("/libpackagekit/package-sack", pk_test_package_sack_func);
+	g_test_add_func ("/libpackagekit/task", pk_test_task_func);
+	g_test_add_func ("/libpackagekit/task-wrapper", pk_test_task_wrapper_func);
+	g_test_add_func ("/libpackagekit/task-text", pk_test_task_text_func);
+	g_test_add_func ("/libpackagekit/console", pk_test_console_func);
 
 	return g_test_run ();
 }

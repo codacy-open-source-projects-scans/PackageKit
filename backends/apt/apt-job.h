@@ -22,6 +22,9 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 #include <glib.h>
@@ -35,11 +38,39 @@
 #include "pkg-list.h"
 #include "apt-sourceslist.h"
 
-#define REBOOT_REQUIRED_FILE "/run/reboot-required"
-
 class pkgProblemResolver;
+typedef struct _AsPool AsPool;
+class pkgPackageManager;
 class Matcher;
 class AptCacheFile;
+
+/**
+ * The result of resolving a full upgrade of the system: what would be
+ * upgraded, newly installed, removed, obsoleted, downgraded or is held back.
+ * Computed by AptJob::computeUpdatePlan().
+ */
+struct UpdatePlan {
+    PkgList updates;
+    PkgList blocked;
+    PkgList downgrades;
+    PkgList installs;
+    PkgList removals;
+    PkgList obsoleted;
+};
+
+/**
+ * Everything a transaction needs: which packages to install, remove or
+ * update, the transaction flags, and how to treat dependent packages.
+ */
+struct TransactionRequest {
+    PkgList install;
+    PkgList remove;
+    PkgList update;
+    PkBitfield flags = 0;
+    bool autoremove = false;
+    bool allowRemoveDeps = true;
+};
+
 class AptJob
 {
 public:
@@ -54,12 +85,6 @@ public:
      * Returns the PackageKit backend job associated with this APT job.
      */
     PkBackendJob *pkJob() const;
-
-    /**
-     * Tries to find a package with the given packageId
-     * @returns pkgCache::VerIterator, if .end() is true the package could not be found
-     */
-    pkgCache::VerIterator findPackageId(const gchar *packageId);
 
     /**
      * Tries to find a list of packages mathing the package ids
@@ -86,6 +111,13 @@ public:
         PkgList &obsoleted);
 
     /**
+     * Determines all available updates and their consequences.
+     * Leaves the cache without any install/remove marks.
+     * @returns the plan, or std::nullopt if the upgrade could not be resolved.
+     */
+    std::optional<UpdatePlan> computeUpdatePlan();
+
+    /**
      * Refreshes the sources of packages
      */
     void refreshCache();
@@ -99,28 +131,10 @@ public:
     bool markFileForInstall(std::string const &file);
 
     /**
-     * Marks the given packages as auto installed
+     * Runs a transaction to install/remove/update packages, or simulates it
+     * if the request's flags say so. An empty request repairs broken packages.
      */
-    void markAutoInstalled(const PkgList &pkgs);
-
-    /**
-     * runs a transaction to install/remove/update packages
-     * @param install List of packages to install
-     * @param remove List of packages to remove
-     * @param update List of packages to update
-     * @param fixBroken whether to automatically fix broken packages
-     * @param flags operation flags as per public API
-     * @param autoremove whether to autoremove dangling packages
-     * @param allowRemoveDeps whether to allow removal of dependent packages
-     */
-    bool runTransaction(
-        const PkgList &install,
-        const PkgList &remove,
-        const PkgList &update,
-        bool fixBroken,
-        PkBitfield flags,
-        bool autoremove,
-        bool allowRemoveDeps);
+    bool runTransaction(const TransactionRequest &request);
 
     /**
      *  Get package depends
@@ -136,6 +150,11 @@ public:
      * Returns a list of all packages in the cache
      */
     PkgList getPackages();
+
+    /**
+     * The state (installed, available, residual) to report for a package version
+     */
+    PkInfoEnum packageStateFromVer(const pkgCache::VerIterator &ver) const;
 
     /**
      * Returns a list of all packages in the cache
@@ -161,18 +180,6 @@ public:
      * Returns a list of all packages that matched contains the given files
      */
     PkgList searchPackageFiles(gchar **values);
-
-    /**
-     * Determines available updates.
-     * Returns true on success.
-     */
-    bool getUpdates(
-        PkgList &updates,
-        PkgList &blocked,
-        PkgList &downgrades,
-        PkgList &installs,
-        PkgList &removals,
-        PkgList &obsoleted);
 
     /**
      *  Emits a package with the given state
@@ -267,30 +274,48 @@ public:
 
     AptCacheFile *aptCacheFile() const;
 
+    /**
+     * Find a package of the running transaction by name, falling back to
+     * the cache for packages dpkg touches that we did not mark ourselves.
+     */
+    pkgCache::VerIterator findTransactionPackage(const std::string &name);
+
 private:
     void setEnvLocaleFromJob();
     bool checkTrusted(pkgAcquire &fetcher, PkBitfield flags);
-    bool packageIsSupported(const pkgCache::VerIterator &verIter, std::string component);
+
+    /**
+     * Check that the archives can be downloaded: emit the download size,
+     * require a network connection if anything is left to fetch, and make
+     * sure the archive directory has enough free space.
+     */
+    bool checkDownloadRequirements(pkgAcquire &fetcher);
+
+    /**
+     * Fork dpkg via the package manager, relay its progress and conffile
+     * prompts, and report an error if it fails.
+     */
+    bool runDpkg(pkgPackageManager &PM);
+
+    /**
+     * Load the system AppStream metadata pool.
+     * @returns a new pool reference, or nullptr (and emits an error) if loading failed.
+     */
+    AsPool *loadAppStreamPool();
+
+    /** Whether the package of @verIter provides a desktop application according to AppStream. */
     bool isApplication(const pkgCache::VerIterator &verIter);
+
+    bool packageIsSupported(const pkgCache::VerIterator &verIter, std::string component);
+
     bool matchesQueries(const std::vector<std::string> &queries, std::string s);
     bool dpkgHasForceConfFileSet();
-    PkInfoEnum packageStateFromVer(const pkgCache::VerIterator &ver) const;
     void stagePackageForEmit(
         GPtrArray *array,
         const pkgCache::VerIterator &ver,
         PkInfoEnum state = PK_INFO_ENUM_UNKNOWN,
         PkSeverityEnum updateSeverity = PK_SEVERITY_ENUM_NONE) const;
     void stageUpdateDetail(GPtrArray *updateArray, const pkgCache::VerIterator &candver);
-
-    /**
-     *  interprets dpkg status fd
-     */
-    void updateInterface(int readFd, int writeFd, bool *errorEmitted = nullptr);
-
-    /**
-     * Handle a single newline-terminated line read from the dpkg status pipe.
-     */
-    void handleDpkgStatusLine(const std::string &line, int writeFd, bool *errorEmitted);
 
     /**
      * Check that no packages are marked for deletion other than those the user
@@ -305,27 +330,27 @@ private:
      * Mark any package for removal that became garbage as a result of the
      * current transaction (i.e. was not garbage initially).
      */
-    void markNewGarbageForRemoval(pkgProblemResolver &Fix, const PkgList &initialGarbage);
+    void markNewGarbageForRemoval(pkgProblemResolver &Fix, const PkgList &initialGarbage, bool purge);
 
     PkgList checkChangedPackages(bool emitChanged);
-    pkgCache::VerIterator findTransactionPackage(const std::string &name);
+
+    /**
+     * Append the packages of this transaction that listed themselves in
+     * one of the reboot-required flag files to output.
+     */
+    void readRebootRequiredPackages(PkgList &output);
 
     std::unique_ptr<AptCacheFile> m_cache;
     PkBackendJob *m_job;
     bool m_cancel;
-    struct stat m_restartStat;
 
     bool m_isMultiArch;
     PkgList m_pkgs;
     PkgList m_restartPackages;
 
-    time_t m_lastTermAction;
-    std::string m_lastPackage;
-    uint m_lastSubProgress;
-    bool m_startCounting;
     bool m_interactive;
-
-    // when the internal terminal timesout after no activity
-    int m_terminalTimeout;
     pid_t m_child_pid;
+
+    /* package names of all AppStream desktop applications, loaded on first use */
+    std::optional<std::set<std::string>> m_appPkgNames;
 };

@@ -19,7 +19,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_CLIENT_H
@@ -96,6 +96,8 @@ struct _PkClientClass
 
 	/* signals */
 	void (*changed) (PkClient *client);
+	gboolean (*frontend_socket) (PkClient *client,
+				     GSocket  *socket);
 	/* padding for future expansion */
 	void (*_pk_reserved1) (void);
 	void (*_pk_reserved2) (void);
@@ -207,23 +209,25 @@ void	     pk_client_get_updates_async (PkClient	     *client,
 					  GAsyncReadyCallback callback_ready,
 					  gpointer	      user_data);
 
-void	     pk_client_get_old_transactions_async (PkClient	      *client,
-						   guint	       number,
-						   GCancellable	      *cancellable,
-						   PkProgressCallback  progress_callback,
-						   gpointer	       progress_user_data,
-						   GAsyncReadyCallback callback_ready,
-						   gpointer	       user_data);
+void	     pk_client_get_history_async (PkClient	     *client,
+					  PkBitfield	      flags,
+					  guint		      count,
+					  gchar		    **names,
+					  GCancellable	     *cancellable,
+					  PkProgressCallback  progress_callback,
+					  gpointer	      progress_user_data,
+					  GAsyncReadyCallback callback_ready,
+					  gpointer	      user_data);
 
-void	     pk_client_depends_on_async (PkClient	    *client,
-					 PkBitfield	     filters,
-					 gchar		   **package_ids,
-					 gboolean	     recursive,
-					 GCancellable	    *cancellable,
-					 PkProgressCallback  progress_callback,
-					 gpointer	     progress_user_data,
-					 GAsyncReadyCallback callback_ready,
-					 gpointer	     user_data);
+void	     pk_client_get_dependencies_async (PkClient		  *client,
+					       PkBitfield	   filters,
+					       gchar		 **package_ids,
+					       gboolean		   recursive,
+					       GCancellable	  *cancellable,
+					       PkProgressCallback  progress_callback,
+					       gpointer		   progress_user_data,
+					       GAsyncReadyCallback callback_ready,
+					       gpointer		   user_data);
 
 void	     pk_client_get_packages_async (PkClient	      *client,
 					   PkBitfield	       filters,
@@ -233,15 +237,15 @@ void	     pk_client_get_packages_async (PkClient	      *client,
 					   GAsyncReadyCallback callback_ready,
 					   gpointer	       user_data);
 
-void	     pk_client_required_by_async (PkClient	     *client,
-					  PkBitfield	      filters,
-					  gchar		    **package_ids,
-					  gboolean	      recursive,
-					  GCancellable	     *cancellable,
-					  PkProgressCallback  progress_callback,
-					  gpointer	      progress_user_data,
-					  GAsyncReadyCallback callback_ready,
-					  gpointer	      user_data);
+void	     pk_client_get_dependents_async (PkClient		*client,
+					     PkBitfield		 filters,
+					     gchar	       **package_ids,
+					     gboolean		 recursive,
+					     GCancellable	*cancellable,
+					     PkProgressCallback	 progress_callback,
+					     gpointer		 progress_user_data,
+					     GAsyncReadyCallback callback_ready,
+					     gpointer		 user_data);
 
 void	     pk_client_what_provides_async (PkClient	       *client,
 					    PkBitfield		filters,
@@ -404,9 +408,6 @@ void	     pk_client_get_progress_async (PkClient	      *client,
 					   GAsyncReadyCallback callback_ready,
 					   gpointer	       user_data);
 
-gboolean     pk_client_create_helper_argv_envp (gchar ***argv,
-						gchar ***envp_out);
-
 /* getters and setters */
 void	     pk_client_set_locale (PkClient    *client,
 				   const gchar *locale);
@@ -421,9 +422,6 @@ gboolean     pk_client_get_idle (PkClient *client);
 void	     pk_client_set_cache_age (PkClient *client,
 				      guint	cache_age);
 guint	     pk_client_get_cache_age (PkClient *client);
-void	     pk_client_set_details_with_deps_size (PkClient *client,
-						   gboolean  details_with_deps_size);
-gboolean     pk_client_get_details_with_deps_size (PkClient *client);
 
 G_END_DECLS
 

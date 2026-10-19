@@ -20,7 +20,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_ENUM_H
@@ -47,12 +47,12 @@ typedef struct
  * PkRoleEnum:
  * @PK_ROLE_ENUM_UNKNOWN: Unknow request
  * @PK_ROLE_ENUM_CANCEL: Cancel transaction
- * @PK_ROLE_ENUM_DEPENDS_ON: Get package dependencies
+ * @PK_ROLE_ENUM_GET_DEPENDENCIES: Get package dependencies
  * @PK_ROLE_ENUM_GET_DETAILS: Get package details
  * @PK_ROLE_ENUM_GET_FILES:
  * @PK_ROLE_ENUM_GET_PACKAGES: Get available packages
  * @PK_ROLE_ENUM_GET_REPO_LIST: Get repository list
- * @PK_ROLE_ENUM_REQUIRED_BY: Get packages required by given package
+ * @PK_ROLE_ENUM_GET_DEPENDENTS: Get packages that depend on the given package
  * @PK_ROLE_ENUM_GET_UPDATE_DETAIL: Get update details
  * @PK_ROLE_ENUM_GET_UPDATES: Get available updates
  * @PK_ROLE_ENUM_INSTALL_FILES: Install package files
@@ -68,11 +68,11 @@ typedef struct
  * @PK_ROLE_ENUM_SEARCH_GROUP: Search for group
  * @PK_ROLE_ENUM_SEARCH_NAME: Search for package name
  * @PK_ROLE_ENUM_UPDATE_PACKAGES: Update packages
- * @PK_ROLE_ENUM_WHAT_PROVIDES: Get what a package provides
+ * @PK_ROLE_ENUM_WHAT_PROVIDES: Get packages that provide a capability
  * @PK_ROLE_ENUM_ACCEPT_EULA: Accept an EULA
  * @PK_ROLE_ENUM_DOWNLOAD_PACKAGES: Download packages
  * @PK_ROLE_ENUM_GET_DISTRO_UPGRADES: Get available distribution upgrades
- * @PK_ROLE_ENUM_GET_OLD_TRANSACTIONS: Get old transation information
+ * @PK_ROLE_ENUM_GET_HISTORY: Get the transaction history
  * @PK_ROLE_ENUM_REPAIR_SYSTEM: Repair system
  * @PK_ROLE_ENUM_GET_DETAILS_LOCAL: Get details on local package
  * @PK_ROLE_ENUM_GET_FILES_LOCAL: Get files provided by local package
@@ -87,12 +87,12 @@ typedef struct
 typedef enum {
 	PK_ROLE_ENUM_UNKNOWN,
 	PK_ROLE_ENUM_CANCEL,
-	PK_ROLE_ENUM_DEPENDS_ON,
+	PK_ROLE_ENUM_GET_DEPENDENCIES,
 	PK_ROLE_ENUM_GET_DETAILS,
 	PK_ROLE_ENUM_GET_FILES,
 	PK_ROLE_ENUM_GET_PACKAGES,
 	PK_ROLE_ENUM_GET_REPO_LIST,
-	PK_ROLE_ENUM_REQUIRED_BY,
+	PK_ROLE_ENUM_GET_DEPENDENTS,
 	PK_ROLE_ENUM_GET_UPDATE_DETAIL,
 	PK_ROLE_ENUM_GET_UPDATES,
 	PK_ROLE_ENUM_INSTALL_FILES,
@@ -112,7 +112,7 @@ typedef enum {
 	PK_ROLE_ENUM_ACCEPT_EULA,
 	PK_ROLE_ENUM_DOWNLOAD_PACKAGES,
 	PK_ROLE_ENUM_GET_DISTRO_UPGRADES,
-	PK_ROLE_ENUM_GET_OLD_TRANSACTIONS,
+	PK_ROLE_ENUM_GET_HISTORY,
 	PK_ROLE_ENUM_REPAIR_SYSTEM,	/* Since: 0.7.2 */
 	PK_ROLE_ENUM_GET_DETAILS_LOCAL, /* Since: 0.8.17 */
 	PK_ROLE_ENUM_GET_FILES_LOCAL,	/* Since: 0.9.1 */
@@ -242,53 +242,31 @@ typedef enum {
 } PkExitEnum;
 
 /**
- * PkNetworkEnum:
- * @PK_NETWORK_ENUM_UNKNOWN: Unknown network
- * @PK_NETWORK_ENUM_OFFLINE: Offline (no network)
- * @PK_NETWORK_ENUM_ONLINE: Online (network type unknown)
- * @PK_NETWORK_ENUM_WIRED: Wired network
- * @PK_NETWORK_ENUM_WIFI: WiFi network
- * @PK_NETWORK_ENUM_MOBILE: Mobile network
- *
- * Network type
- **/
-typedef enum {
-	PK_NETWORK_ENUM_UNKNOWN,
-	PK_NETWORK_ENUM_OFFLINE,
-	PK_NETWORK_ENUM_ONLINE,
-	PK_NETWORK_ENUM_WIRED,
-	PK_NETWORK_ENUM_WIFI,
-	PK_NETWORK_ENUM_MOBILE,
-	/*< private >*/
-	PK_NETWORK_ENUM_LAST
-} PkNetworkEnum;
-
-/**
  * PkFilterEnum:
  * @PK_FILTER_ENUM_UNKNOWN: Unknown filter
  * @PK_FILTER_ENUM_NONE: No filter
  * @PK_FILTER_ENUM_INSTALLED: Filter for installed packages
  * @PK_FILTER_ENUM_NOT_INSTALLED: Filter for not installed packages
+ * @PK_FILTER_ENUM_NEWEST: Filter for newest packages
+ * @PK_FILTER_ENUM_NOT_NEWEST: Filter for not newest packages
  * @PK_FILTER_ENUM_DEVELOPMENT: Filter for development packages
  * @PK_FILTER_ENUM_NOT_DEVELOPMENT: Filter for non-development packages
- * @PK_FILTER_ENUM_GUI: Filter for GUI packages
- * @PK_FILTER_ENUM_NOT_GUI: Filter for non-GUI packages
+ * @PK_FILTER_ENUM_APPLICATION: Filter for packages that provide a desktop application
+ * @PK_FILTER_ENUM_NOT_APPLICATION: Filter for packages that do not provide a desktop application
  * @PK_FILTER_ENUM_FREE: Filter for free packages
  * @PK_FILTER_ENUM_NOT_FREE: Filter for non-free packages
  * @PK_FILTER_ENUM_SUPPORTED: Filter for supported packages
  * @PK_FILTER_ENUM_NOT_SUPPORTED: Filter for not supported packages
  * @PK_FILTER_ENUM_BASENAME: Filter for packages that match basename
  * @PK_FILTER_ENUM_NOT_BASENAME: Filter for packages that don't match basename
- * @PK_FILTER_ENUM_NEWEST: Filter for newest packages
- * @PK_FILTER_ENUM_NOT_NEWEST: Filter for not newest packages
  * @PK_FILTER_ENUM_ARCH: Filter for packages that match architecture
  * @PK_FILTER_ENUM_NOT_ARCH: Filter for packages that don't match architecture
  * @PK_FILTER_ENUM_SOURCE: Filter for source packages
  * @PK_FILTER_ENUM_NOT_SOURCE: Filter for non-source packages
- * @PK_FILTER_ENUM_APPLICATION: Filter for application packages
- * @PK_FILTER_ENUM_NOT_APPLICATION: Filter for non-application packages
  * @PK_FILTER_ENUM_DOWNLOADED: Filter for downloaded packages
  * @PK_FILTER_ENUM_NOT_DOWNLOADED: Filter for not downloaded packages
+ * @PK_FILTER_ENUM_RESIDUAL: Filter for packages that are not installed but have residual data left
+ * @PK_FILTER_ENUM_NOT_RESIDUAL: Filter for packages without residual data
  *
  * The filter types
  **/
@@ -297,26 +275,26 @@ typedef enum {
 	PK_FILTER_ENUM_NONE,
 	PK_FILTER_ENUM_INSTALLED,
 	PK_FILTER_ENUM_NOT_INSTALLED,
+	PK_FILTER_ENUM_NEWEST,
+	PK_FILTER_ENUM_NOT_NEWEST,
 	PK_FILTER_ENUM_DEVELOPMENT,
 	PK_FILTER_ENUM_NOT_DEVELOPMENT,
-	PK_FILTER_ENUM_GUI,
-	PK_FILTER_ENUM_NOT_GUI,
+	PK_FILTER_ENUM_APPLICATION,
+	PK_FILTER_ENUM_NOT_APPLICATION,
 	PK_FILTER_ENUM_FREE,
 	PK_FILTER_ENUM_NOT_FREE,
 	PK_FILTER_ENUM_SUPPORTED,
 	PK_FILTER_ENUM_NOT_SUPPORTED,
 	PK_FILTER_ENUM_BASENAME,
 	PK_FILTER_ENUM_NOT_BASENAME,
-	PK_FILTER_ENUM_NEWEST,
-	PK_FILTER_ENUM_NOT_NEWEST,
 	PK_FILTER_ENUM_ARCH,
 	PK_FILTER_ENUM_NOT_ARCH,
 	PK_FILTER_ENUM_SOURCE,
 	PK_FILTER_ENUM_NOT_SOURCE,
-	PK_FILTER_ENUM_APPLICATION,
-	PK_FILTER_ENUM_NOT_APPLICATION,
 	PK_FILTER_ENUM_DOWNLOADED,     /* Since: 0.8.10 */
 	PK_FILTER_ENUM_NOT_DOWNLOADED, /* Since: 0.8.10 */
+	PK_FILTER_ENUM_RESIDUAL,       /* Since: 2.0.0 */
+	PK_FILTER_ENUM_NOT_RESIDUAL,   /* Since: 2.0.0 */
 	/*< private >*/
 	PK_FILTER_ENUM_LAST,
 } PkFilterEnum;
@@ -610,9 +588,50 @@ typedef enum {
 } PkUpdateStateEnum;
 
 /**
+ * PkIssueKindEnum:
+ * @PK_ISSUE_KIND_ENUM_UNKNOWN: The reference could not be classified
+ * @PK_ISSUE_KIND_ENUM_GENERIC: An issue tracker entry
+ * @PK_ISSUE_KIND_ENUM_CVE: A CVE record or CVE tracker page
+ * @PK_ISSUE_KIND_ENUM_ADVISORY: The distributor's own advisory page for the update
+ *
+ * What a #PkIssue references.
+ *
+ * Since: 2.0.0
+ **/
+typedef enum {
+	PK_ISSUE_KIND_ENUM_UNKNOWN,
+	PK_ISSUE_KIND_ENUM_GENERIC,
+	PK_ISSUE_KIND_ENUM_CVE,
+	PK_ISSUE_KIND_ENUM_ADVISORY,
+	/*< private >*/
+	PK_ISSUE_KIND_ENUM_LAST
+} PkIssueKindEnum;
+
+/**
+ * PkFileKindEnum:
+ * @PK_FILE_KIND_ENUM_UNKNOWN: The backend does not know what the entry is
+ * @PK_FILE_KIND_ENUM_REGULAR: A regular file
+ * @PK_FILE_KIND_ENUM_DIRECTORY: A directory owned by the package
+ * @PK_FILE_KIND_ENUM_SYMLINK: A symbolic link
+ *
+ * What an entry of a package file list is.
+ *
+ * Since: 2.0.0
+ **/
+typedef enum {
+	PK_FILE_KIND_ENUM_UNKNOWN,
+	PK_FILE_KIND_ENUM_REGULAR,
+	PK_FILE_KIND_ENUM_DIRECTORY,
+	PK_FILE_KIND_ENUM_SYMLINK,
+	/*< private >*/
+	PK_FILE_KIND_ENUM_LAST
+} PkFileKindEnum;
+
+/**
  * PkInfoEnum:
  * @PK_INFO_ENUM_UNKNOWN:	Package status is unknown
  * @PK_INFO_ENUM_AVAILABLE:	Package is available to be installed
+ * @PK_INFO_ENUM_RESIDUAL:	Package is not installed, but has residual data left
  * @PK_INFO_ENUM_INSTALLED:	Package is installed
  * @PK_INFO_ENUM_BLOCKED:	Package has an update that is blocked
  * @PK_INFO_ENUM_UNTRUSTED:	Package is not signed or can not be verified
@@ -656,6 +675,7 @@ typedef enum {
 	PK_INFO_ENUM_UNKNOWN,
 	/* state */
 	PK_INFO_ENUM_AVAILABLE,
+	PK_INFO_ENUM_RESIDUAL,
 	PK_INFO_ENUM_INSTALLED,
 	PK_INFO_ENUM_BLOCKED,
 	PK_INFO_ENUM_UNTRUSTED,
@@ -774,9 +794,10 @@ typedef enum {
 /**
  * PkTransactionFlagEnum:
  * @PK_TRANSACTION_FLAG_ENUM_NONE: No transaction flag
- * @PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED: Only allow trusted packages
  * @PK_TRANSACTION_FLAG_ENUM_SIMULATE: Simulate transaction
+ * @PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED: Only allow trusted packages
  * @PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD: Only download packages
+ * @PK_TRANSACTION_FLAG_ENUM_PURGE: Also remove residual data of packages that get removed
  * @PK_TRANSACTION_FLAG_ENUM_ALLOW_REINSTALL: Allow package reinstallation
  * @PK_TRANSACTION_FLAG_ENUM_JUST_REINSTALL: Only allow package reinstallation
  * @PK_TRANSACTION_FLAG_ENUM_ALLOW_DOWNGRADE: Allow packages to be downgraded
@@ -785,15 +806,35 @@ typedef enum {
  **/
 typedef enum {
 	PK_TRANSACTION_FLAG_ENUM_NONE,		  /* Since: 0.8.1 */
-	PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED,	  /* Since: 0.8.1 */
 	PK_TRANSACTION_FLAG_ENUM_SIMULATE,	  /* Since: 0.8.1 */
+	PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED,	  /* Since: 0.8.1 */
 	PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,	  /* Since: 0.8.1 */
+	PK_TRANSACTION_FLAG_ENUM_PURGE,		  /* Since: 2.0.0 */
 	PK_TRANSACTION_FLAG_ENUM_ALLOW_REINSTALL, /* Since: 1.0.2 */
 	PK_TRANSACTION_FLAG_ENUM_JUST_REINSTALL,  /* Since: 1.0.2 */
 	PK_TRANSACTION_FLAG_ENUM_ALLOW_DOWNGRADE, /* Since: 1.0.2 */
 	/*< private >*/
 	PK_TRANSACTION_FLAG_ENUM_LAST /* Since: 0.8.1 */
 } PkTransactionFlagEnum;
+
+/**
+ * PkHistoryFlagEnum:
+ * @PK_HISTORY_FLAG_ENUM_NONE: No history flag
+ * @PK_HISTORY_FLAG_ENUM_SUCCEEDED: Only return transactions that succeeded
+ * @PK_HISTORY_FLAG_ENUM_PACKAGE_CHANGES: Only return packages that were installed,
+ *   removed or updated, and skip transactions without any
+ *
+ * The flags that filter the transaction history.
+ *
+ * Since: 2.0.0
+ **/
+typedef enum {
+	PK_HISTORY_FLAG_ENUM_NONE,
+	PK_HISTORY_FLAG_ENUM_SUCCEEDED,
+	PK_HISTORY_FLAG_ENUM_PACKAGE_CHANGES,
+	/*< private >*/
+	PK_HISTORY_FLAG_ENUM_LAST
+} PkHistoryFlagEnum;
 
 /* general */
 guint		      pk_enum_find_value (const PkEnumMatch *table,
@@ -812,12 +853,13 @@ const gchar	     *pk_severity_enum_to_string (PkSeverityEnum severity);
 
 PkUpdateStateEnum     pk_update_state_enum_from_string (const gchar *update_state);
 const gchar	     *pk_update_state_enum_to_string (PkUpdateStateEnum update_state);
+PkIssueKindEnum	      pk_issue_kind_enum_from_string (const gchar *issue_kind);
+const gchar	     *pk_issue_kind_enum_to_string (PkIssueKindEnum issue_kind);
+PkFileKindEnum	      pk_file_kind_enum_from_string (const gchar *file_kind);
+const gchar	     *pk_file_kind_enum_to_string (PkFileKindEnum file_kind);
 
 PkExitEnum	      pk_exit_enum_from_string (const gchar *exit);
 const gchar	     *pk_exit_enum_to_string (PkExitEnum exit);
-
-PkNetworkEnum	      pk_network_enum_from_string (const gchar *network);
-const gchar	     *pk_network_enum_to_string (PkNetworkEnum network);
 
 PkStatusEnum	      pk_status_enum_from_string (const gchar *status);
 const gchar	     *pk_status_enum_to_string (PkStatusEnum status);
@@ -848,6 +890,9 @@ const gchar	     *pk_upgrade_kind_enum_to_string (PkUpgradeKindEnum upgrade_kind
 
 PkTransactionFlagEnum pk_transaction_flag_enum_from_string (const gchar *transaction_flag);
 const gchar	     *pk_transaction_flag_enum_to_string (PkTransactionFlagEnum transaction_flag);
+
+PkHistoryFlagEnum     pk_history_flag_enum_from_string (const gchar *history_flag);
+const gchar	     *pk_history_flag_enum_to_string (PkHistoryFlagEnum history_flag);
 
 const gchar	     *pk_status_enum_to_localised_text (PkStatusEnum status);
 const gchar	     *pk_info_enum_to_localised_past (PkInfoEnum info);

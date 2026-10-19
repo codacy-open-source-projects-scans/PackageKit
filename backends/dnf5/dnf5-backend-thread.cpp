@@ -45,9 +45,6 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 
 	g_autoptr(GMutexLocker) locker = g_mutex_locker_new(&priv->mutex);
 
-	// Update cache-only mode based on current network state
-	dnf5_update_network_state(priv, pk_backend_is_online(backend));
-
 	try {
 		if (role == PK_ROLE_ENUM_SEARCH_NAME || role == PK_ROLE_ENUM_SEARCH_DETAILS
 		    || role == PK_ROLE_ENUM_SEARCH_FILE || role == PK_ROLE_ENUM_RESOLVE
@@ -126,7 +123,7 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 			g_debug("Final results: %zu packages", results.size());
 			dnf5_sort_and_emit(job, results);
 
-		} else if (role == PK_ROLE_ENUM_DEPENDS_ON || role == PK_ROLE_ENUM_REQUIRED_BY) {
+		} else if (role == PK_ROLE_ENUM_GET_DEPENDENCIES || role == PK_ROLE_ENUM_GET_DEPENDENTS) {
 			PkBitfield filters;
 			g_auto(GStrv) package_ids = NULL;
 			gboolean recursive;
@@ -216,28 +213,28 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 				g_variant_get(params, "(^as&s)", &package_ids, &directory);
 				auto pkgs = dnf5_resolve_package_ids(*priv->base, package_ids);
 				libdnf5::repo::PackageDownloader downloader(*priv->base);
-				uint64_t total_download_size = 0;
-				for (const auto &pkg : pkgs)
-					total_download_size += pkg.get_download_size();
-
-				priv->base->set_download_callbacks(
-					std::make_unique<Dnf5DownloadCallbacks>(job, total_download_size));
+				auto callbacks = std::make_unique<Dnf5DownloadCallbacks>(job);
 				for (auto &pkg : pkgs) {
-					dnf5_emit_pkg(job, pkg, PK_INFO_ENUM_DOWNLOADING);
+					callbacks->add_package(pkg);
 					downloader.add(pkg, directory);
 				}
-				downloader.download();
 
-				std::vector<char *> files_c;
+				pk_backend_job_set_status(job, PK_STATUS_ENUM_DOWNLOAD);
+				{
+					Dnf5ScopedDownloadCallbacks scoped(*priv->base, std::move(callbacks));
+					downloader.download();
+				}
+
+				g_autoptr(GPtrArray)
+					files = g_ptr_array_new_with_free_func((GDestroyNotify) pk_file_free);
 				for (auto &pkg : pkgs) {
 					std::string path = pkg.get_package_path();
 					if (!path.empty())
-						files_c.push_back(g_strdup(path.c_str()));
+						g_ptr_array_add(
+							files,
+							pk_file_new(path.c_str(), PK_FILE_KIND_ENUM_REGULAR));
 				}
-				files_c.push_back(nullptr);
-				pk_backend_job_files(job, NULL, files_c.data());
-				for (auto p : files_c)
-					g_free(p);
+				pk_backend_job_files(job, NULL, files);
 				pk_backend_job_finished(job);
 				return;
 			} else {
@@ -269,16 +266,27 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 					if (it != pkg_to_adv_pkg.end()) {
 						auto advisory = it->second.get_advisory();
 
-						std::vector<std::string> bugzilla_urls, cve_urls, vendor_urls;
+						g_autoptr(GPtrArray) issues = g_ptr_array_new_with_free_func(
+							(GDestroyNotify) pk_issue_free);
 						for (const auto &ref : advisory.get_references()) {
+							PkIssueKindEnum kind;
 							if (ref.get_url().empty())
 								continue;
-							if (ref.get_type() == "bugzilla")
-								bugzilla_urls.push_back(ref.get_url());
-							else if (ref.get_type() == "cve")
-								cve_urls.push_back(ref.get_url());
-							else if (ref.get_type() == "vendor")
-								vendor_urls.push_back(ref.get_url());
+							if (ref.get_type() == "cve")
+								kind = PK_ISSUE_KIND_ENUM_CVE;
+							else if (ref.get_type() == "vendor" || ref.get_type() == "self")
+								// the vendor's own advisory page
+								kind = PK_ISSUE_KIND_ENUM_ADVISORY;
+							else
+								// bugzilla, or any other issue tracker
+								kind = PK_ISSUE_KIND_ENUM_GENERIC;
+							g_ptr_array_add(
+								issues,
+								pk_issue_new(
+									kind,
+									ref.get_url().c_str(),
+									ref.get_id().c_str(),
+									ref.get_title().c_str()));
 						}
 
 						auto buildtime = advisory.get_buildtime();
@@ -293,35 +301,17 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 						else if (it->second.get_relogin_suggested())
 							restart = PK_RESTART_ENUM_SESSION;
 
-						g_auto(GStrv) bugzilla_strv = (gchar **) g_new0(
-							gchar *,
-							bugzilla_urls.size() + 1);
-						for (size_t i = 0; i < bugzilla_urls.size(); i++)
-							bugzilla_strv[i] = g_strdup(bugzilla_urls[i].c_str());
-						g_auto(GStrv)
-							cve_strv = (gchar **) g_new0(gchar *, cve_urls.size() + 1);
-						for (size_t i = 0; i < cve_urls.size(); i++)
-							cve_strv[i] = g_strdup(cve_urls[i].c_str());
-						g_auto(GStrv) vendor_strv = (gchar **) g_new0(
-							gchar *,
-							vendor_urls.size() + 1);
-						for (size_t i = 0; i < vendor_urls.size(); i++)
-							vendor_strv[i] = g_strdup(vendor_urls[i].c_str());
-
 						g_ptr_array_add(
 							update_details,
 							pk_update_detail_new_full(
 								pid.c_str(),
 								NULL,
 								NULL,
-								vendor_strv,
-								bugzilla_strv,
-								cve_strv,
+								issues,
 								restart,
 								advisory.get_description().c_str(),
 								NULL,
 								PK_UPDATE_STATE_ENUM_STABLE,
-								date_str,
 								date_str));
 					}
 				}
@@ -348,12 +338,7 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 						pkg.get_install_size(),
 						pkg.get_download_size());
 				} else if (role == PK_ROLE_ENUM_GET_FILES) {
-					auto files_vec = pkg.get_files();
-					std::vector<char *> files_c;
-					for (const auto &f : files_vec)
-						files_c.push_back(const_cast<char *>(f.c_str()));
-					files_c.push_back(nullptr);
-					pk_backend_job_files(job, pid.c_str(), files_c.data());
+					dnf5_emit_files(job, pid, pkg);
 				}
 			}
 		} else if (role == PK_ROLE_ENUM_GET_DETAILS_LOCAL || role == PK_ROLE_ENUM_GET_FILES_LOCAL) {
@@ -382,12 +367,7 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 						pkg.get_install_size(),
 						0);
 				} else {
-					auto files_vec = pkg.get_files();
-					std::vector<char *> files_c;
-					for (const auto &f : files_vec)
-						files_c.push_back(const_cast<char *>(f.c_str()));
-					files_c.push_back(nullptr);
-					pk_backend_job_files(job, pid.c_str(), files_c.data());
+					dnf5_emit_files(job, pid, pkg);
 				}
 			}
 		} else if (role == PK_ROLE_ENUM_GET_REPO_LIST) {
@@ -408,7 +388,7 @@ dnf5_query_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 			}
 		}
 	} catch (const std::exception &e) {
-		pk_backend_job_error_code(job, PK_ERROR_ENUM_TRANSACTION_ERROR, "%s", e.what());
+		dnf5_job_error_from_exception(job, e, PK_ERROR_ENUM_TRANSACTION_ERROR);
 	}
 	pk_backend_job_finished(job);
 }
@@ -422,9 +402,6 @@ dnf5_transaction_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 
 	g_autoptr(GMutexLocker) locker = g_mutex_locker_new(&priv->mutex);
 
-	// Update cache-only mode based on current network state
-	dnf5_update_network_state(priv, pk_backend_is_online(backend));
-
 	try {
 		if (role == PK_ROLE_ENUM_UPGRADE_SYSTEM) {
 			gchar *distro_id = NULL;
@@ -432,7 +409,8 @@ dnf5_transaction_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 			PkBitfield transaction_flags;
 			g_variant_get(params, "(t&su)", &transaction_flags, &distro_id, &upgrade_kind);
 			if (distro_id) {
-				dnf5_setup_base(priv, TRUE, TRUE, distro_id);
+				pk_backend_job_set_status(job, PK_STATUS_ENUM_REFRESH_CACHE);
+				dnf5_setup_base(priv, TRUE, TRUE, distro_id, job);
 
 				g_debug("Checking repositories for system upgrade to %s:", distro_id);
 				// ... logging code ...
@@ -661,20 +639,25 @@ dnf5_transaction_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 			return;
 		}
 
-		pk_backend_job_set_status(job, PK_STATUS_ENUM_DOWNLOAD);
-
-		uint64_t total_download_size = 0;
+		auto callbacks = std::make_unique<Dnf5DownloadCallbacks>(job);
+		bool need_download = false;
 		for (const auto &item : trans.get_transaction_packages()) {
 			if (libdnf5::transaction::transaction_item_action_is_inbound(item.get_action())) {
 				auto pkg = item.get_package();
 				if (!pkg.is_available_locally()) {
-					total_download_size += pkg.get_download_size();
+					callbacks->add_package(pkg);
+					need_download = true;
 				}
 			}
 		}
 
-		priv->base->set_download_callbacks(std::make_unique<Dnf5DownloadCallbacks>(job, total_download_size));
-		trans.download();
+		// removals and local packages have nothing to download
+		if (need_download)
+			pk_backend_job_set_status(job, PK_STATUS_ENUM_DOWNLOAD);
+		{
+			Dnf5ScopedDownloadCallbacks scoped(*priv->base, std::move(callbacks));
+			trans.download();
+		}
 
 		if (pk_bitfield_contain(transaction_flags, PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD)) {
 			// Iterate over transaction items and report what the prepared transaction will do
@@ -704,8 +687,14 @@ dnf5_transaction_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 			return;
 		}
 
-		pk_backend_job_set_status(job, PK_STATUS_ENUM_RUNNING);
-		trans.set_callbacks(std::make_unique<Dnf5TransactionCallbacks>(job));
+		// libdnf5 checks the signatures and runs an rpm test transaction
+		// before any transaction callback is called
+		pk_backend_job_set_status(job, PK_STATUS_ENUM_TEST_COMMIT);
+		pk_backend_job_set_percentage(job, PK_BACKEND_PERCENTAGE_INVALID);
+		auto transaction_callbacks = std::make_unique<Dnf5TransactionCallbacks>(job);
+		for (const auto &item : trans.get_transaction_packages())
+			transaction_callbacks->add_package(item);
+		trans.set_callbacks(std::move(transaction_callbacks));
 		auto res = trans.run();
 		g_debug("Transaction run result: %s",
 			libdnf5::base::Transaction::transaction_result_to_string(res).c_str());
@@ -724,10 +713,14 @@ dnf5_transaction_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 		}
 
 		// Post-transaction base re-initialization to ensure state consistency
+		pk_backend_job_set_status(job, PK_STATUS_ENUM_LOADING_CACHE);
+		pk_backend_job_set_percentage(job, PK_BACKEND_PERCENTAGE_INVALID);
 		dnf5_setup_base(priv);
+		if (res == libdnf5::base::Transaction::TransactionRunResult::SUCCESS)
+			pk_backend_job_set_percentage(job, 100);
 
 	} catch (const std::exception &e) {
-		pk_backend_job_error_code(job, PK_ERROR_ENUM_TRANSACTION_ERROR, "%s", e.what());
+		dnf5_job_error_from_exception(job, e, PK_ERROR_ENUM_TRANSACTION_ERROR);
 		// we may have been interrupted after mutating the shared base, so rebuild it
 		// rather than leave the leftovers visible to the next transaction
 		try {
@@ -747,9 +740,6 @@ dnf5_repo_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 	PkRoleEnum role = pk_backend_job_get_role(job);
 
 	g_autoptr(GMutexLocker) locker = g_mutex_locker_new(&priv->mutex);
-
-	// Update cache-only mode based on current network state
-	dnf5_update_network_state(priv, pk_backend_is_online(backend));
 
 	try {
 		if (role == PK_ROLE_ENUM_REPO_ENABLE || role == PK_ROLE_ENUM_REPO_SET_DATA) {
@@ -957,7 +947,7 @@ dnf5_repo_thread(PkBackendJob *job, GVariant *params, gpointer user_data)
 		}
 	} catch (const std::exception &e) {
 		g_warning("Exception in dnf5_repo_thread: %s", e.what());
-		pk_backend_job_error_code(job, PK_ERROR_ENUM_TRANSACTION_ERROR, "%s", e.what());
+		dnf5_job_error_from_exception(job, e, PK_ERROR_ENUM_TRANSACTION_ERROR);
 	}
 	g_debug("Calling pk_backend_job_finished in dnf5_repo_thread");
 	pk_backend_job_finished(job);

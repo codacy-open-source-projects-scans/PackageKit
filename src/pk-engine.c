@@ -45,6 +45,7 @@
 #include "pk-backend.h"
 #include "pk-dbus.h"
 #include "pk-engine.h"
+#include "pk-proxy-store.h"
 #include "pk-shared.h"
 #include "pk-transaction-db.h"
 #include "pk-transaction.h"
@@ -52,6 +53,7 @@
 
 static void pk_engine_finalize (GObject *object);
 static void pk_engine_set_locked (PkEngine *engine, gboolean is_locked);
+static void pk_engine_refresh_reboot_required (PkEngine *engine);
 
 /* how long to wait when we get the StateHasChanged method */
 #define PK_ENGINE_STATE_CHANGED_TIMEOUT_PRIORITY 2 /* s */
@@ -74,7 +76,6 @@ struct _PkEngine
 	PkScheduler *scheduler;
 	PkTransactionDb *transaction_db;
 	PkBackend *backend;
-	GNetworkMonitor *network_monitor;
 	GKeyFile *conf;
 	PkDbus *dbus;
 	GFileMonitor *monitor_conf;
@@ -89,11 +90,11 @@ struct _PkEngine
 	const gchar *backend_description;
 	const gchar *backend_author;
 	gchar *distro_id;
+	gchar **reboot_package_ids; /* NULL if no system restart is pending */
 	guint timeout_priority_id;
 	guint timeout_normal_id;
 	PolkitAuthority *authority;
 	gboolean locked;
-	PkNetworkEnum network_state;
 	guint owner_id;
 	GDBusNodeInfo *introspection;
 	GDBusConnection *connection;
@@ -168,6 +169,7 @@ pk_engine_scheduler_changed_cb (PkScheduler *scheduler, PkEngine *engine)
 	/* automatically locked if the transaction cannot be cancelled */
 	pk_engine_set_locked (engine, pk_scheduler_get_locked (scheduler));
 	pk_engine_set_inhibited (engine, pk_scheduler_get_inhibited (scheduler));
+	pk_engine_refresh_reboot_required (engine);
 
 	transaction_list = pk_scheduler_get_array (scheduler);
 	g_dbus_connection_emit_signal (engine->connection,
@@ -204,6 +206,39 @@ pk_engine_emit_property_changed (PkEngine *engine,
 	    "PropertiesChanged",
 	    g_variant_new ("(sa{sv}as)", PK_DBUS_INTERFACE, &builder, &invalidated_builder),
 	    NULL);
+}
+
+static GVariant *
+pk_engine_get_reboot_required_variant (PkEngine *engine)
+{
+	GVariantBuilder builder;
+	const gchar *const *ids = (const gchar *const *) engine->reboot_package_ids;
+	PkRestartEnum restart = ids != NULL ? PK_RESTART_ENUM_SYSTEM : PK_RESTART_ENUM_NONE;
+
+	g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+	g_variant_builder_add (&builder, "{sv}", "restart", g_variant_new_uint32 (restart));
+	g_variant_builder_add (&builder,
+			       "{sv}",
+			       "package-ids",
+			       g_variant_new_strv (ids, ids != NULL ? -1 : 0));
+	return g_variant_builder_end (&builder);
+}
+
+static void
+pk_engine_refresh_reboot_required (PkEngine *engine)
+{
+	g_auto(GStrv) ids = pk_util_reboot_state_load (engine->conf);
+	const gchar *const *old_ids = (const gchar *const *) engine->reboot_package_ids;
+
+	if ((ids == NULL) == (old_ids == NULL) &&
+	    (ids == NULL || g_strv_equal ((const gchar *const *) ids, old_ids)))
+		return;
+
+	g_strfreev (engine->reboot_package_ids);
+	engine->reboot_package_ids = g_steal_pointer (&ids);
+	pk_engine_emit_property_changed (engine,
+					 "RebootRequired",
+					 pk_engine_get_reboot_required_variant (engine));
 }
 
 static void
@@ -363,12 +398,6 @@ pk_engine_state_changed_cb (gpointer data)
 	if (!pk_offline_auth_invalidate (&error))
 		g_warning ("failed to invalidate: %s", error->message);
 
-	/* if network is not up, then just reschedule */
-	if (!g_network_monitor_get_network_available (engine->network_monitor)) {
-		/* wait another timeout of PK_ENGINE_STATE_CHANGED_x_TIMEOUT */
-		return TRUE;
-	}
-
 	pk_backend_updates_changed (engine->backend);
 
 	/* reset, now valid */
@@ -440,9 +469,10 @@ pk_engine_set_proxy_internal (PkEngine *engine,
 			      const gchar *pac,
 			      GError **error)
 {
-	gboolean ret;
 	guint uid;
 	g_autofree gchar *session = NULL;
+	g_autoptr(GError) error_local = NULL;
+	g_autoptr(PkProxySettings) settings = NULL;
 
 	if (!pk_dbus_connect (engine->dbus, error)) {
 		g_set_error_literal (error,
@@ -462,31 +492,20 @@ pk_engine_set_proxy_internal (PkEngine *engine,
 		return FALSE;
 	}
 
-	/* get session */
+	/* save for the lifetime of the caller's session */
 	session = pk_dbus_get_session (engine->dbus, sender);
-	if (session == NULL) {
-		g_set_error_literal (error,
-				     PK_ENGINE_ERROR,
-				     PK_ENGINE_ERROR_CANNOT_SET_PROXY,
-				     "failed to get the session");
-		return FALSE;
-	}
-
-	/* save to database */
-	ret = pk_transaction_db_set_proxy (engine->transaction_db,
-					   uid,
-					   session,
-					   proxy_http,
-					   proxy_https,
-					   proxy_ftp,
-					   proxy_socks,
-					   no_proxy,
-					   pac);
-	if (!ret) {
-		g_set_error_literal (error,
-				     PK_ENGINE_ERROR,
-				     PK_ENGINE_ERROR_CANNOT_SET_PROXY,
-				     "failed to save the proxy in the database");
+	settings = pk_proxy_settings_new (proxy_http,
+					  proxy_https,
+					  proxy_ftp,
+					  proxy_socks,
+					  no_proxy,
+					  pac);
+	if (!pk_proxy_store_save (engine->conf, uid, session, settings, &error_local)) {
+		g_set_error (error,
+			     PK_ENGINE_ERROR,
+			     PK_ENGINE_ERROR_CANNOT_SET_PROXY,
+			     "failed to save the proxy: %s",
+			     error_local->message);
 		return FALSE;
 	}
 	return TRUE;
@@ -592,14 +611,10 @@ pk_engine_is_proxy_unchanged (PkEngine *engine,
 			      const gchar *pac)
 {
 	guint uid;
-	gboolean ret = FALSE;
 	g_autofree gchar *session = NULL;
-	g_autofree gchar *proxy_http_tmp = NULL;
-	g_autofree gchar *proxy_https_tmp = NULL;
-	g_autofree gchar *proxy_ftp_tmp = NULL;
-	g_autofree gchar *proxy_socks_tmp = NULL;
-	g_autofree gchar *no_proxy_tmp = NULL;
-	g_autofree gchar *pac_tmp = NULL;
+	g_autoptr(GError) error_local = NULL;
+	g_autoptr(PkProxySettings) stored = NULL;
+	g_autoptr(PkProxySettings) requested = NULL;
 
 	if (!pk_dbus_connect (engine->dbus, NULL)) {
 		g_warning ("failed to get the D-Bus proxy");
@@ -613,34 +628,19 @@ pk_engine_is_proxy_unchanged (PkEngine *engine,
 		return FALSE;
 	}
 
-	/* get session */
+	/* find out if they are the same as what we tried to set before */
 	session = pk_dbus_get_session (engine->dbus, sender);
-	if (session == NULL) {
-		g_warning ("failed to get the session for %s", sender);
+	if (!pk_proxy_store_load (engine->conf, uid, session, &stored, &error_local)) {
+		g_warning ("failed to load the proxy for uid %u: %s", uid, error_local->message);
 		return FALSE;
 	}
-
-	/* find out if they are the same as what we tried to set before */
-	ret = pk_transaction_db_get_proxy (engine->transaction_db,
-					   uid,
-					   session,
-					   &proxy_http_tmp,
-					   &proxy_https_tmp,
-					   &proxy_ftp_tmp,
-					   &proxy_socks_tmp,
-					   &no_proxy_tmp,
-					   &pac_tmp);
-	if (!ret)
-		return FALSE;
-
-	/* are different? */
-	if (g_strcmp0 (proxy_http_tmp, proxy_http) != 0 ||
-	    g_strcmp0 (proxy_https_tmp, proxy_https) != 0 ||
-	    g_strcmp0 (proxy_ftp_tmp, proxy_ftp) != 0 ||
-	    g_strcmp0 (proxy_socks_tmp, proxy_socks) != 0 ||
-	    g_strcmp0 (no_proxy_tmp, no_proxy) != 0 || g_strcmp0 (pac_tmp, pac) != 0)
-		return FALSE;
-	return TRUE;
+	requested = pk_proxy_settings_new (proxy_http,
+					   proxy_https,
+					   proxy_ftp,
+					   proxy_socks,
+					   no_proxy,
+					   pac);
+	return pk_proxy_settings_equal (stored, requested);
 }
 
 static PolkitCheckAuthorizationFlags
@@ -885,36 +885,6 @@ pk_engine_offline_upgrade_file_changed_cb (GFileMonitor *file_monitor,
 	pk_engine_emit_offline_property_changed (engine, "PreparedUpgrade", prepared_upgrade);
 }
 
-static PkNetworkEnum
-pk_engine_get_network_state (GNetworkMonitor *network_monitor)
-{
-	if (!g_network_monitor_get_network_available (network_monitor))
-		return PK_NETWORK_ENUM_OFFLINE;
-	/* this isn't exactly true, but it's what the UI expects */
-	if (g_network_monitor_get_network_metered (network_monitor))
-		return PK_NETWORK_ENUM_MOBILE;
-	return PK_NETWORK_ENUM_ONLINE;
-}
-
-static void
-pk_engine_network_state_changed_cb (GNetworkMonitor *network_monitor,
-				    gboolean available,
-				    PkEngine *engine)
-{
-	PkNetworkEnum network_state;
-	g_return_if_fail (PK_IS_ENGINE (engine));
-
-	network_state = pk_engine_get_network_state (network_monitor);
-	if (network_state == engine->network_state)
-		return;
-	engine->network_state = network_state;
-
-	/* emit */
-	pk_engine_emit_property_changed (engine,
-					 "NetworkState",
-					 g_variant_new_uint32 (network_state));
-}
-
 static void
 pk_engine_setup_file_monitors (PkEngine *engine)
 {
@@ -1116,10 +1086,10 @@ pk_engine_daemon_get_property (GDBusConnection *connection_,
 		return g_variant_new_strv ((const gchar *const *) engine->mime_types, -1);
 	if (g_strcmp0 (property_name, "Locked") == 0)
 		return g_variant_new_boolean (engine->locked);
-	if (g_strcmp0 (property_name, "NetworkState") == 0)
-		return g_variant_new_uint32 (engine->network_state);
 	if (g_strcmp0 (property_name, "DistroId") == 0)
 		return _g_variant_new_maybe_string (engine->distro_id);
+	if (g_strcmp0 (property_name, "RebootRequired") == 0)
+		return pk_engine_get_reboot_required_variant (engine);
 
 	/* return an error */
 	g_set_error (error,
@@ -1128,185 +1098,6 @@ pk_engine_daemon_get_property (GDBusConnection *connection_,
 		     "failed to get property '%s'",
 		     property_name);
 	return NULL;
-}
-
-static gboolean
-pk_engine_package_name_in_strv (gchar **strv, PkPackage *pkg)
-{
-	guint i;
-	for (i = 0; strv[i] != NULL; i++) {
-		if (g_strcmp0 (strv[i], pk_package_get_name (pkg)) == 0)
-			return TRUE;
-	}
-	return FALSE;
-}
-
-static GVariant *
-pk_engine_get_package_history_pkg (PkTransactionPast *item, PkPackage *pkg)
-{
-	GVariantBuilder builder;
-	g_variant_builder_init (&builder, G_VARIANT_TYPE_ARRAY);
-	g_variant_builder_add (&builder,
-			       "{sv}",
-			       "info",
-			       g_variant_new_uint32 (pk_package_get_info (pkg)));
-	g_variant_builder_add (&builder,
-			       "{sv}",
-			       "source",
-			       g_variant_new_string (pk_package_get_data (pkg)));
-	g_variant_builder_add (&builder,
-			       "{sv}",
-			       "version",
-			       g_variant_new_string (pk_package_get_version (pkg)));
-	g_variant_builder_add (&builder,
-			       "{sv}",
-			       "timestamp",
-			       g_variant_new_uint64 (pk_transaction_past_get_timestamp (item)));
-	g_variant_builder_add (&builder,
-			       "{sv}",
-			       "user-id",
-			       g_variant_new_uint32 (pk_transaction_past_get_uid (item)));
-	return g_variant_builder_end (&builder);
-}
-
-static gboolean
-pk_engine_is_package_history_interesing (PkPackage *package)
-{
-	gboolean ret;
-
-	switch (pk_package_get_info (package)) {
-	case PK_INFO_ENUM_INSTALLING:
-	case PK_INFO_ENUM_REMOVING:
-	case PK_INFO_ENUM_UPDATING:
-		ret = TRUE;
-		break;
-	default:
-		ret = FALSE;
-		break;
-	}
-	return ret;
-}
-
-static GVariant *
-pk_engine_get_package_history (PkEngine *engine,
-			       gchar **package_names,
-			       guint max_size,
-			       GError **error)
-{
-	const gchar *data;
-	const gchar *pkgname;
-	gboolean ret;
-	gchar *key;
-	gint64 timestamp;
-	GList *l;
-	GList *list;
-	GPtrArray *array = NULL;
-	guint i;
-	GVariantBuilder builder;
-	GVariant *value = NULL;
-	PkTransactionPast *item;
-	g_autoptr(GHashTable) deduplicate_hash = NULL;
-	g_autoptr(GHashTable) pkgname_hash = NULL;
-	g_autoptr(GList) keys = NULL;
-	g_autoptr(PkPackage) package_tmp = NULL;
-
-	list = pk_transaction_db_get_list (engine->transaction_db, max_size);
-
-	/* simplify the loop */
-	if (max_size == 0)
-		max_size = G_MAXUINT;
-
-	pkgname_hash = g_hash_table_new_full (g_str_hash,
-					      g_str_equal,
-					      g_free,
-					      (GDestroyNotify) g_ptr_array_unref);
-	deduplicate_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-	package_tmp = pk_package_new ();
-	for (l = list; l != NULL; l = l->next) {
-		g_auto(GStrv) package_lines = NULL;
-		item = PK_TRANSACTION_PAST (l->data);
-
-		/* ignore anything that failed */
-		if (!pk_transaction_past_get_succeeded (item))
-			continue;
-
-		/* split up data */
-		data = pk_transaction_past_get_data (item);
-		if (data == NULL)
-			continue;
-		package_lines = g_strsplit (data, "\n", -1);
-		for (i = 0; package_lines[i] != NULL; i++) {
-			g_autoptr(GError) error_local = NULL;
-			ret = pk_package_parse (package_tmp, package_lines[i], &error_local);
-			if (!ret) {
-				g_warning ("Failed to parse package: '%s': %s",
-					   package_lines[i],
-					   error_local->message);
-				continue;
-			}
-
-			/* not the package we care about */
-			if (!pk_engine_package_name_in_strv (package_names, package_tmp))
-				continue;
-
-			/* not a state we care about */
-			if (!pk_engine_is_package_history_interesing (package_tmp))
-				continue;
-
-			/* transactions without a timestamp are not interesting */
-			timestamp = pk_transaction_past_get_timestamp (item);
-			if (timestamp == 0)
-				continue;
-
-			/* de-duplicate the entry, in the case of multiarch */
-			key = g_strdup_printf ("%s-%" G_GINT64_FORMAT,
-					       pk_package_get_name (package_tmp),
-					       timestamp);
-			if (g_hash_table_lookup (deduplicate_hash, key) != NULL) {
-				g_free (key);
-				continue;
-			}
-			g_hash_table_insert (deduplicate_hash, key, package_lines[i]);
-
-			/* get the blob for this data item */
-			value = pk_engine_get_package_history_pkg (item, package_tmp);
-			if (value == NULL)
-				continue;
-
-			/* find the array */
-			pkgname = pk_package_get_name (package_tmp);
-			array = g_hash_table_lookup (pkgname_hash, pkgname);
-			if (array == NULL) {
-				array = g_ptr_array_new ();
-				g_hash_table_insert (pkgname_hash, g_strdup (pkgname), array);
-			}
-			g_ptr_array_add (array, value);
-		}
-	}
-
-	/* no history returns an empty array */
-	if (g_hash_table_size (pkgname_hash) == 0) {
-		value = g_variant_new_array (G_VARIANT_TYPE ("{saa{sv}}"), NULL, 0);
-		goto out;
-	}
-
-	/* we have a hash of pkgname:GPtrArray where the GPtrArray is an array
-	 * of GVariants of type a{sv} */
-	g_variant_builder_init (&builder, G_VARIANT_TYPE_ARRAY);
-	keys = g_hash_table_get_keys (pkgname_hash);
-	for (l = keys; l != NULL; l = l->next) {
-		pkgname = l->data;
-		array = g_hash_table_lookup (pkgname_hash, pkgname);
-		/* create aa{sv} */
-		value = g_variant_new_array (NULL,
-					     (GVariant *const *) array->pdata,
-					     MIN (array->len, max_size));
-		g_variant_builder_add (&builder, "{s@aa{sv}}", pkgname, value);
-	}
-	value = g_variant_builder_end (&builder);
-out:
-	g_list_free_full (list, (GDestroyNotify) g_object_unref);
-	return value;
 }
 
 static void
@@ -1323,7 +1114,6 @@ pk_engine_daemon_method_call (GDBusConnection *connection_,
 	gboolean ret;
 	guint time_since;
 	GVariant *value = NULL;
-	GVariant *tuple = NULL;
 	PkAuthorizeEnum result_enum;
 	PkEngine *engine = PK_ENGINE (user_data);
 	PkRoleEnum role;
@@ -1351,33 +1141,6 @@ pk_engine_daemon_method_call (GDBusConnection *connection_,
 		data = pk_scheduler_get_state (engine->scheduler);
 		value = g_variant_new ("(s)", data);
 		g_dbus_method_invocation_return_value (invocation, value);
-		return;
-	}
-
-	if (g_strcmp0 (method_name, "GetPackageHistory") == 0) {
-		g_autofree gchar **package_names = NULL;
-
-		g_variant_get (parameters, "(^a&su)", &package_names, &size);
-		if (package_names == NULL || g_strv_length (package_names) == 0) {
-			g_dbus_method_invocation_return_error (invocation,
-							       PK_ENGINE_ERROR,
-							       PK_ENGINE_ERROR_NOT_SUPPORTED,
-							       "history for package name invalid");
-			return;
-		}
-		value = pk_engine_get_package_history (engine, package_names, size, &error);
-		if (value == NULL) {
-			g_dbus_method_invocation_return_error (
-			    invocation,
-			    PK_ENGINE_ERROR,
-			    PK_ENGINE_ERROR_NOT_SUPPORTED,
-			    "history for package name %s failed: %s",
-			    package_names[0],
-			    error->message);
-			return;
-		}
-		tuple = g_variant_new_tuple (&value, 1);
-		g_dbus_method_invocation_return_value (invocation, tuple);
 		return;
 	}
 
@@ -1980,14 +1743,6 @@ pk_engine_init (PkEngine *engine)
 		g_error ("PkEngine: failed to load daemon introspection: %s", error->message);
 	}
 
-	/* proxy the network state */
-	engine->network_monitor = g_network_monitor_get_default ();
-	g_signal_connect (engine->network_monitor,
-			  "network-changed",
-			  G_CALLBACK (pk_engine_network_state_changed_cb),
-			  engine);
-	engine->network_state = pk_engine_get_network_state (engine->network_monitor);
-
 	/* try to get the distro id */
 	engine->distro_id = pk_get_distro_id ();
 
@@ -2070,6 +1825,7 @@ pk_engine_finalize (GObject *object)
 	g_key_file_unref (engine->conf);
 	g_object_unref (engine->dbus);
 	g_strfreev (engine->mime_types);
+	g_strfreev (engine->reboot_package_ids);
 	g_free (engine->distro_id);
 
 	G_OBJECT_CLASS (pk_engine_parent_class)->finalize (object);
@@ -2079,23 +1835,27 @@ PkEngine *
 pk_engine_new (GKeyFile *conf)
 {
 	PkEngine *engine;
-	g_autofree gchar *root_dir = NULL;
+	g_autofree gchar *cache_dir = NULL;
 	g_autofree gchar *download_dir = NULL;
+	g_autofree gchar *staging_dir = NULL;
 
 	engine = g_object_new (PK_TYPE_ENGINE, NULL);
 	engine->conf = g_key_file_ref (conf);
+	engine->reboot_package_ids = pk_util_reboot_state_load (conf);
 
 	/* clear the download cache */
-	root_dir = pk_util_get_root_dir (conf);
-	download_dir = g_build_filename (root_dir,
-					 LOCALSTATEDIR,
-					 "cache",
-					 "PackageKit",
-					 "downloads",
-					 NULL);
+	cache_dir = pk_util_get_cache_dir (conf);
+	download_dir = g_build_filename (cache_dir, "downloads", NULL);
 	if (g_file_test (download_dir, G_FILE_TEST_EXISTS)) {
 		g_debug ("clearing download cache at %s", download_dir);
 		pk_directory_remove_contents (download_dir);
+	}
+
+	/* clear package files a transaction staged before a crash */
+	staging_dir = g_build_filename (cache_dir, "staging", NULL);
+	if (g_file_test (staging_dir, G_FILE_TEST_EXISTS)) {
+		g_debug ("clearing staged files at %s", staging_dir);
+		pk_directory_remove_contents (staging_dir);
 	}
 
 	/* we use a transaction db to store old transactions */

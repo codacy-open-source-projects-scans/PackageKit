@@ -27,6 +27,7 @@
 G_BEGIN_DECLS
 
 gboolean       pk_directory_remove_contents (const gchar *directory);
+gchar	      *pk_fd_get_basename (gint fd);
 GPtrArray     *pk_directory_find_files_with_suffix (const gchar *directory,
 						    const gchar *filename_suffix);
 guint	       pk_strlen (const gchar *text,
@@ -47,6 +48,13 @@ gboolean       pk_util_load_config (GKeyFile	*conf,
 				    const gchar *filename,
 				    GError     **error);
 gchar	      *pk_util_get_root_dir (GKeyFile *conf);
+gchar	      *pk_util_get_cache_dir (GKeyFile *conf);
+gchar	      *pk_util_get_runtime_dir (GKeyFile *conf,
+					GError	**error);
+gchar	     **pk_util_reboot_state_load (GKeyFile *conf);
+gboolean       pk_util_reboot_state_add (GKeyFile    *conf,
+					 const gchar *package_id,
+					 GError	    **error);
 gboolean       pk_util_set_auto_backend (GKeyFile *conf,
 					 GError	 **error);
 

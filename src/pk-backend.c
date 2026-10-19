@@ -32,6 +32,7 @@
 #include <pk-package-id.h>
 #include <pk-results.h>
 #include <pk-common.h>
+#include <pk-common-private.h>
 
 #include "pk-backend.h"
 #include "pk-shared.h"
@@ -56,6 +57,7 @@ typedef struct
 	PkBitfield (*get_provides) (PkBackend *backend);
 	gchar **(*get_mime_types) (PkBackend *backend);
 	gboolean (*supports_parallelization) (PkBackend *backend);
+	gboolean (*supports_frontend_socket) (PkBackend *backend);
 	void (*job_start) (PkBackend *backend, PkBackendJob *job);
 	void (*job_stop) (PkBackend *backend, PkBackendJob *job);
 	void (*run_job) (PkBackend *backend, PkBackendJob *job);
@@ -135,6 +137,23 @@ pk_backend_supports_parallelization (PkBackend *backend)
 	return backend->desc->supports_parallelization (backend);
 }
 
+/**
+ * pk_backend_supports_frontend_socket:
+ *
+ * Whether the backend asks the user questions through the frontend socket
+ * of a job, e.g. for debconf.
+ **/
+gboolean
+pk_backend_supports_frontend_socket (PkBackend *backend)
+{
+	g_return_val_if_fail (PK_IS_BACKEND (backend), FALSE);
+
+	/* not compulsory */
+	if (backend->desc->supports_frontend_socket == NULL)
+		return FALSE;
+	return backend->desc->supports_frontend_socket (backend);
+}
+
 void
 pk_backend_thread_start (PkBackend *backend, PkBackendJob *job, gpointer func)
 {
@@ -187,7 +206,7 @@ pk_backend_get_roles (PkBackend *backend)
 	g_return_val_if_fail (pk_is_thread_default (), PK_ROLE_ENUM_UNKNOWN);
 
 	backend->roles = backend->desc->get_roles (backend);
-	pk_bitfield_add (backend->roles, PK_ROLE_ENUM_GET_OLD_TRANSACTIONS);
+	pk_bitfield_add (backend->roles, PK_ROLE_ENUM_GET_HISTORY);
 	return backend->roles;
 }
 
@@ -319,6 +338,7 @@ pk_backend_load (PkBackend *backend, GError **error)
 		g_module_symbol (handle, "pk_backend_get_groups", (gpointer *) &desc->get_groups);
 		g_module_symbol (handle, "pk_backend_get_mime_types", (gpointer *) &desc->get_mime_types);
 		g_module_symbol (handle, "pk_backend_supports_parallelization", (gpointer *) &desc->supports_parallelization);
+		g_module_symbol (handle, "pk_backend_supports_frontend_socket", (gpointer *) &desc->supports_frontend_socket);
 		g_module_symbol (handle, "pk_backend_get_roles", (gpointer *) &desc->get_roles);
 		g_module_symbol (handle, "pk_backend_get_provides", (gpointer *) &desc->get_provides);
 		g_module_symbol (handle, "pk_backend_initialize", (gpointer *) &desc->initialize);
@@ -347,6 +367,18 @@ pk_backend_load (PkBackend *backend, GError **error)
 			     1,
 			     0,
 			     "could not find description in plugin %s, not loading",
+			     backend_name);
+		return FALSE;
+	}
+
+	/* a module for spawned backends is useless without a manifest */
+	if (manifest == NULL && g_module_symbol (handle, "pk_backend_initialize_manifest", &func)) {
+		g_clear_pointer (&backend->desc, g_free);
+		g_module_close (handle);
+		g_set_error (error,
+			     1,
+			     0,
+			     "module %s can only run backends that have a manifest",
 			     backend_name);
 		return FALSE;
 	}
@@ -669,14 +701,6 @@ pk_backend_bool_to_string (gboolean value)
 	return "no";
 }
 
-gboolean
-pk_backend_is_online (PkBackend *backend)
-{
-	GNetworkMonitor *network_monitor;
-	network_monitor = g_network_monitor_get_default ();
-	return g_network_monitor_get_network_available (network_monitor);
-}
-
 /**
  * pk_backend_convert_uri:
  *
@@ -976,11 +1000,11 @@ pk_backend_download_packages (PkBackend *backend,
 }
 
 void
-pk_backend_depends_on (PkBackend *backend,
-		       PkBackendJob *job,
-		       PkBitfield filters,
-		       gchar **package_ids,
-		       gboolean recursive)
+pk_backend_get_dependencies (PkBackend *backend,
+			     PkBackendJob *job,
+			     PkBitfield filters,
+			     gchar **package_ids,
+			     gboolean recursive)
 {
 	g_return_if_fail (PK_IS_BACKEND (backend));
 	g_return_if_fail (pk_is_thread_default ());
@@ -988,7 +1012,7 @@ pk_backend_depends_on (PkBackend *backend,
 	/* final pre-flight checks */
 	g_assert (pk_backend_job_get_vfunc_enabled (job, PK_BACKEND_SIGNAL_FINISHED));
 
-	pk_backend_job_set_role (job, PK_ROLE_ENUM_DEPENDS_ON);
+	pk_backend_job_set_role (job, PK_ROLE_ENUM_GET_DEPENDENCIES);
 	pk_backend_job_set_parameters (job,
 				       g_variant_new ("(t^asb)", filters, package_ids, recursive));
 	backend->desc->run_job (backend, job);
@@ -1009,7 +1033,7 @@ pk_backend_get_details (PkBackend *backend, PkBackendJob *job, gchar **package_i
 }
 
 void
-pk_backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **files)
+pk_backend_get_details_local (PkBackend *backend, PkBackendJob *job, GUnixFDList *fds)
 {
 	g_return_if_fail (PK_IS_BACKEND (backend));
 	g_return_if_fail (pk_is_thread_default ());
@@ -1018,12 +1042,14 @@ pk_backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **fil
 	g_assert (pk_backend_job_get_vfunc_enabled (job, PK_BACKEND_SIGNAL_FINISHED));
 
 	pk_backend_job_set_role (job, PK_ROLE_ENUM_GET_DETAILS_LOCAL);
-	pk_backend_job_set_parameters (job, g_variant_new ("(^as)", files));
+	pk_backend_job_set_file_fds (job, fds);
+	pk_backend_job_set_parameters (job,
+				       g_variant_new ("(@ah)", pk_unix_fd_list_get_handles (fds)));
 	backend->desc->run_job (backend, job);
 }
 
 void
-pk_backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **files)
+pk_backend_get_files_local (PkBackend *backend, PkBackendJob *job, GUnixFDList *fds)
 {
 	g_return_if_fail (PK_IS_BACKEND (backend));
 	g_return_if_fail (pk_is_thread_default ());
@@ -1032,7 +1058,9 @@ pk_backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **files
 	g_assert (pk_backend_job_get_vfunc_enabled (job, PK_BACKEND_SIGNAL_FINISHED));
 
 	pk_backend_job_set_role (job, PK_ROLE_ENUM_GET_FILES_LOCAL);
-	pk_backend_job_set_parameters (job, g_variant_new ("(^as)", files));
+	pk_backend_job_set_file_fds (job, fds);
+	pk_backend_job_set_parameters (job,
+				       g_variant_new ("(@ah)", pk_unix_fd_list_get_handles (fds)));
 	backend->desc->run_job (backend, job);
 }
 
@@ -1064,11 +1092,11 @@ pk_backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids
 }
 
 void
-pk_backend_required_by (PkBackend *backend,
-			PkBackendJob *job,
-			PkBitfield filters,
-			gchar **package_ids,
-			gboolean recursive)
+pk_backend_get_dependents (PkBackend *backend,
+			   PkBackendJob *job,
+			   PkBitfield filters,
+			   gchar **package_ids,
+			   gboolean recursive)
 {
 	g_return_if_fail (PK_IS_BACKEND (backend));
 	g_return_if_fail (pk_is_thread_default ());
@@ -1076,7 +1104,7 @@ pk_backend_required_by (PkBackend *backend,
 	/* final pre-flight checks */
 	g_assert (pk_backend_job_get_vfunc_enabled (job, PK_BACKEND_SIGNAL_FINISHED));
 
-	pk_backend_job_set_role (job, PK_ROLE_ENUM_REQUIRED_BY);
+	pk_backend_job_set_role (job, PK_ROLE_ENUM_GET_DEPENDENTS);
 	pk_backend_job_set_parameters (job,
 				       g_variant_new ("(t^asb)", filters, package_ids, recursive));
 	backend->desc->run_job (backend, job);
@@ -1151,7 +1179,7 @@ void
 pk_backend_install_files (PkBackend *backend,
 			  PkBackendJob *job,
 			  PkBitfield transaction_flags,
-			  gchar **full_paths)
+			  GUnixFDList *fds)
 {
 	g_return_if_fail (PK_IS_BACKEND (backend));
 	g_return_if_fail (pk_is_thread_default ());
@@ -1161,8 +1189,10 @@ pk_backend_install_files (PkBackend *backend,
 
 	pk_backend_job_set_role (job, PK_ROLE_ENUM_INSTALL_FILES);
 	pk_backend_job_set_transaction_flags (job, transaction_flags);
-	pk_backend_job_set_parameters (job,
-				       g_variant_new ("(t^as)", transaction_flags, full_paths));
+	pk_backend_job_set_file_fds (job, fds);
+	pk_backend_job_set_parameters (
+	    job,
+	    g_variant_new ("(t@ah)", transaction_flags, pk_unix_fd_list_get_handles (fds)));
 	backend->desc->run_job (backend, job);
 }
 
@@ -1357,6 +1387,7 @@ pk_backend_repo_remove (PkBackend *backend,
 	g_assert (pk_backend_job_get_vfunc_enabled (job, PK_BACKEND_SIGNAL_FINISHED));
 
 	pk_backend_job_set_role (job, PK_ROLE_ENUM_REPO_REMOVE);
+	pk_backend_job_set_transaction_flags (job, transaction_flags);
 	pk_backend_job_set_parameters (
 	    job,
 	    g_variant_new ("(tsb)", transaction_flags, repo_id, autoremove));

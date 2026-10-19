@@ -1997,10 +1997,10 @@ zypp_is_no_solvable (const sat::Solvable &solv)
 }
 
 /**
-  * backend_required_by_thread:
+  * backend_get_dependents_thread:
   */
 static void
-backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
+backend_get_dependents_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
 	MIL << endl;
 
@@ -2037,7 +2037,7 @@ backend_required_by_thread (PkBackendJob *job, GVariant *params, gpointer user_d
 
 		PoolItem package = PoolItem(solvable);
 
-		// required-by only works for installed packages. It's meaningless for stuff in the repo
+		// get-dependents only works for installed packages. It's meaningless for stuff in the repo
 		// same with yum backend
 		if (!solvable.isSystem ())
 			continue;
@@ -2142,7 +2142,7 @@ pk_backend_get_filters (PkBackend *backend)
  * clearly often there is no simple answer.
  */
 static void
-backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
+backend_get_dependencies_thread (PkBackendJob *job, GVariant *params, gpointer user_data)
 {
 	PkBitfield _filters;
 	gchar **package_ids;
@@ -2191,7 +2191,7 @@ backend_depends_on_thread (PkBackendJob *job, GVariant *params, gpointer user_da
 		vector<string> pkg_names;
 
 		for (Capabilities::const_iterator cap = req.begin (); cap != req.end (); ++cap) {
-			g_debug ("depends_on - capability '%s'", cap->asString().c_str());
+			g_debug ("get_dependencies - capability '%s'", cap->asString().c_str());
 
 			if (caps.find (cap->asString ()) != caps.end()) {
 				g_debug ("Interesting ! already have capability '%s'", cap->asString().c_str());
@@ -2363,8 +2363,16 @@ backend_get_details_local_thread (PkBackendJob *job, GVariant *params, gpointer 
 	ZyppJob zjob(job);
 	ZYpp::Ptr zypp = zjob.get_zypp();
 
-	gchar **full_paths;
-	g_variant_get (params, "(^a&s)", &full_paths);
+	g_autoptr(GVariant) handles = NULL;
+	g_auto(GStrv) full_paths = NULL;
+	g_variant_get (params, "(@ah)", &handles);
+	g_autoptr(GError) file_error = NULL;
+	full_paths = pk_backend_job_get_file_paths (job, handles, &file_error);
+	if (full_paths == NULL) {
+		zypp_backend_finished_error (
+			job, PK_ERROR_ENUM_INVALID_PACKAGE_FILE, "%s", file_error->message);
+		return;
+	}
 
 	if (zypp == NULL){
 		return;
@@ -2420,8 +2428,16 @@ backend_get_files_local_thread (PkBackendJob *job, GVariant *params, gpointer us
 	if (zypp == NULL)
 		return;
 
-	gchar **full_paths;
-	g_variant_get (params, "(^a&s)", &full_paths);
+	g_autoptr(GVariant) handles = NULL;
+	g_auto(GStrv) full_paths = NULL;
+	g_variant_get (params, "(@ah)", &handles);
+	g_autoptr(GError) file_error = NULL;
+	full_paths = pk_backend_job_get_file_paths (job, handles, &file_error);
+	if (full_paths == NULL) {
+		zypp_backend_finished_error (
+			job, PK_ERROR_ENUM_INVALID_PACKAGE_FILE, "%s", file_error->message);
+		return;
+	}
 
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	pk_backend_job_set_percentage (job, 0);
@@ -2447,18 +2463,14 @@ backend_get_files_local_thread (PkBackendJob *job, GVariant *params, gpointer us
 					NULL);
 
 		std::list<std::string> filenames = rpmHeader->tag_filenames ();
-		GPtrArray *array = g_ptr_array_new ();
+		g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
 
 		for (std::list<std::string>::iterator it = filenames.begin (); it != filenames.end (); it++)
-			g_ptr_array_add (array, g_strdup ((*it).c_str ()));
+			g_ptr_array_add (files, pk_file_new ((*it).c_str (), PK_FILE_KIND_ENUM_UNKNOWN));
 
-		g_ptr_array_add(array, NULL);
-		gchar **files_array = (gchar**)g_ptr_array_free (array, FALSE);
-
-		pk_backend_job_files (job, package_id, files_array);
+		pk_backend_job_files (job, package_id, files);
 
 		g_free (package_id);
-		g_strfreev (files_array);
 	}
 }
 
@@ -2627,10 +2639,16 @@ backend_install_files_thread (PkBackendJob *job, GVariant *params, gpointer user
 	ZYpp::Ptr zypp = zjob.get_zypp();
 
 	PkBitfield transaction_flags;
-	gchar **full_paths;
-	g_variant_get (params, "(t^a&s)",
-		       &transaction_flags,
-		       &full_paths);
+	g_autoptr(GVariant) handles = NULL;
+	g_auto(GStrv) full_paths = NULL;
+	g_variant_get (params, "(t@ah)", &transaction_flags, &handles);
+	g_autoptr(GError) file_error = NULL;
+	full_paths = pk_backend_job_get_file_paths (job, handles, &file_error);
+	if (full_paths == NULL) {
+		zypp_backend_finished_error (
+			job, PK_ERROR_ENUM_INVALID_PACKAGE_FILE, "%s", file_error->message);
+		return;
+	}
 
 	if (zypp == NULL){
 		return;
@@ -2757,21 +2775,27 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 
 		PkRestartEnum restart = PK_RESTART_ENUM_NONE;
 
-		GPtrArray *bugzilla = g_ptr_array_new();
-		GPtrArray *cve = g_ptr_array_new();
-		GPtrArray *vendor_urls = g_ptr_array_new();
+		GPtrArray *issues = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_issue_free);
 
 		if (isKind<Patch>(solvable)) {
 			Patch::constPtr patch = make<Patch>(solvable); // may use asKind<Patch> if libzypp-11.6.4 is asserted
 			zypp_check_restart (&restart, patch);
 
-			// Building links like "http://www.distro-update.org/page?moo;Bugfix release for kernel;http://www.test.de/bgz;test domain"
+			// Any reference type that is neither a CVE nor the vendor's own
+			// advisory page is treated as an issue tracker entry, whatever
+			// tracker it comes from (bugzilla, fate, ...).
 			for (Patch::ReferenceIterator it = patch->referencesBegin (); it != patch->referencesEnd (); it ++) {
-				if (it.type () == "bugzilla") {
-				    g_ptr_array_add(bugzilla, g_strconcat (it.href ().c_str (), (gchar *)NULL));
-				} else {
-				    g_ptr_array_add(cve, g_strconcat (it.href ().c_str (), (gchar *)NULL));
-				}
+				PkIssueKindEnum kind;
+				if (it.href ().empty ())
+				    continue;
+				if (it.type () == "cve")
+				    kind = PK_ISSUE_KIND_ENUM_CVE;
+				else if (it.type () == "vendor" || it.type () == "self")
+				    kind = PK_ISSUE_KIND_ENUM_ADVISORY;
+				else
+				    kind = PK_ISSUE_KIND_ENUM_GENERIC;
+				g_ptr_array_add (issues, pk_issue_new (kind, it.href ().c_str (),
+								       it.id ().c_str (), it.title ().c_str ()));
 			}
 
 			sat::SolvableSet content = patch->contents ();
@@ -2783,30 +2807,22 @@ backend_get_update_detail_thread (PkBackendJob *job, GVariant *params, gpointer 
 				    g_ptr_array_add(obsoletes, nobs->pdata[i]);
 			}
 		}
-		g_ptr_array_add(bugzilla, NULL);
-		g_ptr_array_add(cve, NULL);
 		g_ptr_array_add(obsoletes, NULL);
-		g_ptr_array_add(vendor_urls, NULL);
 
 		PkUpdateDetail *item = pk_update_detail_new_full (
 			package_ids[i],
 			NULL,		// updates TODO with Resolver.installs
 			(gchar **)obsoletes->pdata,
-			(gchar **)vendor_urls->pdata,
-			(gchar **)bugzilla->pdata,	// bugzilla
-			(gchar **)cve->pdata,		// cve
+			issues,
 			restart,	// restart -flag
 			make<ResObject>(solvable)->description().c_str (),	// update-text
 			NULL,		// ChangeLog text
 			PK_UPDATE_STATE_ENUM_UNKNOWN,		// state of the update
-			NULL, // date that the update was issued
-			NULL);	// date that the update was updated
+			NULL);	// time the update was issued
 		g_ptr_array_add (update_details, item);
 
 		g_ptr_array_unref(obsoletes);
-		g_ptr_array_unref(vendor_urls);
-		g_ptr_array_unref(bugzilla);
-		g_ptr_array_unref(cve);
+		g_ptr_array_unref(issues);
 	}
 
 	pk_backend_job_update_details (job, update_details);
@@ -3404,10 +3420,9 @@ backend_get_files_thread (PkBackendJob *job, GVariant *params, gpointer user_dat
 			return;
 		}
 
-		g_auto(GStrv) strv = NULL;
 		g_autoptr(GPtrArray) pkg_files = NULL;
 
-		pkg_files = g_ptr_array_new ();
+		pkg_files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
 
 		if (solvable.isSystem ()){
 			try {
@@ -3415,7 +3430,7 @@ backend_get_files_thread (PkBackendJob *job, GVariant *params, gpointer user_dat
 				list<string> files = rpmHeader->tag_filenames ();
 
 				for (list<string>::iterator it = files.begin (); it != files.end (); ++it) {
-					g_ptr_array_add (pkg_files, g_strdup (it->c_str ()));
+					g_ptr_array_add (pkg_files, pk_file_new (it->c_str (), PK_FILE_KIND_ENUM_UNKNOWN));
 				}
 
 			} catch (const target::rpm::RpmException &ex) {
@@ -3425,13 +3440,10 @@ backend_get_files_thread (PkBackendJob *job, GVariant *params, gpointer user_dat
 			}
 		} else {
 			g_ptr_array_add (pkg_files,
-					 g_strdup ("Only available for installed packages"));
+					 pk_file_new ("Only available for installed packages", PK_FILE_KIND_ENUM_UNKNOWN));
 		}
 
-		/* Convert to GStrv. */
-		g_ptr_array_add (pkg_files, NULL);
-		strv = g_strdupv ((gchar **) pkg_files->pdata);
-		pk_backend_job_files (job, package_ids[i], strv);
+		pk_backend_job_files (job, package_ids[i], pkg_files);
 	}
 }
 
@@ -3925,9 +3937,9 @@ backend_download_packages_thread (PkBackendJob *job, GVariant *params, gpointer 
 			target += "/";
 			target += tmp_file->basename();
 			zypp::filesystem::hardlinkCopy(tmp_file, target);
-			const gchar *to_strv[] = { NULL, NULL };
-			to_strv[0] =  target.c_str();
-			pk_backend_job_files (job, package_ids[i],(gchar **) to_strv);
+			g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+			g_ptr_array_add (files, pk_file_new (target.c_str (), PK_FILE_KIND_ENUM_REGULAR));
+			pk_backend_job_files (job, package_ids[i], files);
 			pk_backend_job_package_status (job, package_ids[i], PK_INFO_ENUM_DOWNLOADING);
 		}
 	} catch (const Exception &ex) {
@@ -4117,8 +4129,8 @@ PkBitfield
 pk_backend_get_roles (PkBackend *backend)
 {
 	return pk_bitfield_from_enums (
-		PK_ROLE_ENUM_REQUIRED_BY,
-		PK_ROLE_ENUM_DEPENDS_ON,
+		PK_ROLE_ENUM_GET_DEPENDENTS,
+		PK_ROLE_ENUM_GET_DEPENDENCIES,
 		PK_ROLE_ENUM_GET_DETAILS,
 		PK_ROLE_ENUM_GET_DETAILS_LOCAL,
 		PK_ROLE_ENUM_GET_FILES_LOCAL,
@@ -4155,11 +4167,11 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
 	GVariant *params = pk_backend_job_get_parameters (job);
 
 	switch (role) {
-	case PK_ROLE_ENUM_REQUIRED_BY:
-		pk_backend_job_thread_create (job, backend_required_by_thread, NULL, NULL);
+	case PK_ROLE_ENUM_GET_DEPENDENTS:
+		pk_backend_job_thread_create (job, backend_get_dependents_thread, NULL, NULL);
 		break;
-	case PK_ROLE_ENUM_DEPENDS_ON:
-		pk_backend_job_thread_create (job, backend_depends_on_thread, NULL, NULL);
+	case PK_ROLE_ENUM_GET_DEPENDENCIES:
+		pk_backend_job_thread_create (job, backend_get_dependencies_thread, NULL, NULL);
 		break;
 	case PK_ROLE_ENUM_GET_DETAILS:
 		pk_backend_job_thread_create (job, backend_get_details_thread, NULL, NULL);

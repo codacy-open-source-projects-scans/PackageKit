@@ -98,13 +98,19 @@
       TransactionFlags:
 
       The flags set for this transaction, e.g. SIMULATE or ONLY_DOWNLOAD.
+
+      The PURGE flag asks the backend to also remove residual data (such as
+      configuration files) of every package the transaction removes. It is only
+      valid for roles that remove packages and is rejected for InstallPackages
+      and InstallFiles. A transaction with this flag additionally requires the
+      `org.freedesktop.packagekit.package-remove` authorization.
     -->
     <property name="TransactionFlags" type="t" access="read"/>
 
     <!--*********************************************************************-->
     <!--
       SetHints:
-      @hints: The values as an array of strings, for example `['locale=en_GB.utf8','idle=true','interactive=false','cache-age=3600']`.
+      @hints: The hints as a dictionary, for example `{'locale': <'en_GB.utf8'>, 'background': <true>, 'interactive': <false>, 'cache-age': <3600>}`.
 
       This method allows the calling session to set transaction hints for the
       package manager which can change as the transaction runs.
@@ -114,36 +120,57 @@
       sent, although some backends may only use the values that were set
       before the transaction was started.
 
-      Each parameter value is optional.
+      Every hint is optional. A value of the wrong type is rejected with
+      `input-invalid`. Unknown keys are ignored, so that newer clients keep
+      working against older daemons.
 
       Notes on `hints`:
 
-      The following parameter values are understood:
+      The following hints are understood:
 
-      - `locale`: The locale code, for example `en_GB`.
-      - `background`: If the method should be executed as a background task,
-        valid values are `true` and `false`, and other values will result in
-        an error. Background tasks are normally treated with a low priority
-        than regular tasks, and normally only use idle CPU and network.
+      - `locale`: The locale code, for example `en_GB`. [`s`]
+      - `background`: If the method should be executed as a background task.
+        Background tasks are normally treated with a lower priority than
+        regular tasks, and normally only use idle CPU and network. [`b`]
       - `interactive`: If the method can ask interactive questions whilst
-        running, valid values are `true` and `false`, and other values will
-        result in an error.
+        running. [`b`]
       - `cache-age`: This allows the frontend to set how fresh it needs the
-        metadata used in the transaction. This allows fine control of the age
-        of the returned results, but means the frontend probably has to query
-        the updates check value and pass it this value for `GetUpdates`, and
-        choose something sane otherwise. Most interactive clients will set
-        this to `intmax` which means "never download new metadata, unless
-        required to return results". Most transactions will not have this
-        value set.
-
-      Other values will cause a verbose warning in the daemon, but will not
-      cause the method to fail. This will preserve forward and backwards
-      compatibility for future API versions.
+        metadata used in the transaction, in seconds. This allows fine control
+        of the age of the returned results, but means the frontend probably has
+        to query the updates check value and pass it this value for
+        `GetUpdates`, and choose something sane otherwise. Most interactive
+        clients will set this to the maximum value, which means "never download
+        new metadata, unless required to return results". Zero is rejected.
+        Most transactions will not have this value set. [`u`]
     -->
     <method name="SetHints">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
-      <arg type="as" name="hints" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap"/>
+      <arg type="a{sv}" name="hints" direction="in"/>
+    </method>
+
+    <!--*********************************************************************-->
+    <!--
+      GetFrontendSocket:
+      @socket: A listening Unix stream socket
+
+      Creates a socket the backend may use to reach a helper in the calling
+      session, e.g. to let maintainer scripts on dpkg-based distributions
+      ask debconf questions. The caller accepts connections on it and answers
+      each one. The same socket is handed back on repeated calls. When the
+      transaction is destroyed, the socket is shut down and removed.
+
+      A caller that stops answering questions has to shut the socket down
+      rather than only close it, otherwise the backend waits for an answer
+      that never comes.
+
+      This is only useful for interactive transactions. Backends that never
+      ask questions this way reject the call with `not-supported`. It has to
+      be called before the transaction has been run.
+    -->
+    <method name="GetFrontendSocket">
+      <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
+      <arg type="h" name="socket" direction="out"/>
     </method>
 
     <!--*********************************************************************-->
@@ -202,19 +229,19 @@
 
     <!--*********************************************************************-->
     <!--
-      DependsOn:
+      GetDependencies:
       @filter: A correct filter bitfield, e.g. `none` or `installed;~devel`
       @package_ids: An array of package IDs.
-      @recursive: Either `true` or `false`. If yes then the requirements should be returned for all packages returned. This means if gnome-power-manager depends on NetworkManager and NetworkManager depends on HAL, then DependsOn on gnome-power-manager should return both HAL and NetworkManager.
+      @recursive: Either `true` or `false`. If yes then the requirements should be returned for all packages returned. This means if gnome-power-manager depends on NetworkManager and NetworkManager depends on HAL, then GetDependencies on gnome-power-manager should return both HAL and NetworkManager.
 
       This method returns packages that this package depends on.
 
       This method typically emits `Progress`, `Status` and `Error` and
       `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
     -->
-    <method name="DependsOn">
+    <method name="GetDependencies">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
       <arg type="t" name="filter" direction="in"/>
       <arg type="as" name="package_ids" direction="in"/>
@@ -239,7 +266,7 @@
     <!--*********************************************************************-->
     <!--
       GetDetailsLocal:
-      @files: An array of filenames.
+      @files: An array of file descriptors, each open for reading on a package file.
 
       This method should return all the details about a specific local file.
 
@@ -248,13 +275,13 @@
     -->
     <method name="GetDetailsLocal">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
-      <arg type="as" name="files" direction="in"/>
+      <arg type="ah" name="files" direction="in"/>
     </method>
 
     <!--*********************************************************************-->
     <!--
       GetFilesLocal:
-      @files: An array of filenames.
+      @files: An array of file descriptors, each open for reading on a package file.
 
       This method should return all the file lists for a specific local file.
 
@@ -263,7 +290,7 @@
     -->
     <method name="GetFilesLocal">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
-      <arg type="as" name="files" direction="in"/>
+      <arg type="ah" name="files" direction="in"/>
     </method>
 
     <!--*********************************************************************-->
@@ -283,13 +310,28 @@
 
     <!--*********************************************************************-->
     <!--
-      GetOldTransactions:
-      @number: The number of past transactions, or 0 for all known transactions.
+      GetHistory:
+      @flags: A history flag bitfield, e.g. `succeeded;package-changes`.
+        `succeeded` skips transactions that failed. `package-changes` only
+        returns packages that were installed, removed or updated.
+      @count: The maximum number of history items to return, or 0 for all.
+      @names: Only return packages with these names, e.g. `[ colord ]`,
+        or an empty array for all packages.
 
-      This method allows a client to view details for old transactions.
+      This method returns the transaction history recorded by PackageKit,
+      newest first. Transactions done outside of PackageKit, e.g. using a
+      distribution native tool, are not included.
+
+      If @names is not empty or `package-changes` is set, each history item
+      only contains the matching packages, and items without any matching
+      package are skipped.
+
+      This method typically emits `History`, `Error` and `Finished`.
     -->
-    <method name="GetOldTransactions">
-      <arg type="u" name="number" direction="in"/>
+    <method name="GetHistory">
+      <arg type="t" name="flags" direction="in"/>
+      <arg type="u" name="count" direction="in"/>
+      <arg type="as" name="names" direction="in"/>
     </method>
 
     <!--*********************************************************************-->
@@ -301,7 +343,7 @@
 
       This method typically emits `Progress`, `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
     -->
     <method name="GetPackages">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
@@ -324,10 +366,10 @@
 
     <!--*********************************************************************-->
     <!--
-      RequiredBy:
+      GetDependents:
       @filter: A correct filter bitfield, e.g. `none` or `installed;~devel`
       @package_ids: An array of package IDs.
-      @recursive: Either `true` or `false`. If yes then the requirements should be returned for all packages returned. This means if gnome-power-manager depends on NetworkManager and NetworkManager depends on HAL, then GetRequires on HAL should return both gnome-power-manager and NetworkManager.
+      @recursive: Either `true` or `false`. If yes then the requirements should be returned for all packages returned. This means if gnome-power-manager depends on NetworkManager and NetworkManager depends on HAL, then GetDependents on HAL should return both gnome-power-manager and NetworkManager.
 
       This method returns packages that depend on this package. This is useful
       to know, as if `package_id` is being removed, we can warn the user what
@@ -336,9 +378,9 @@
       This method typically emits `Progress`, `Status` and `Error` and
       `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
     -->
-    <method name="RequiredBy">
+    <method name="GetDependents">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
       <arg type="t" name="filter" direction="in"/>
       <arg type="as" name="package_ids" direction="in"/>
@@ -443,7 +485,7 @@
     <method name="InstallFiles">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
       <arg type="t" name="transaction_flags" direction="in"/>
-      <arg type="as" name="full_paths" direction="in"/>
+      <arg type="ah" name="files" direction="in"/>
     </method>
 
     <!--*********************************************************************-->
@@ -455,7 +497,7 @@
       This method installs new packages on the local system.
 
       The installer should always install extra packages automatically as the
-      use could call DependsOn prior to the install if a confirmation is
+      use could call GetDependencies prior to the install if a confirmation is
       required in the UI.
 
       This method typically emits `Progress`, `Status` and `Error` and
@@ -621,7 +663,7 @@
 
       This method typically emits `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
 
       Notes on `packages`:
 
@@ -657,7 +699,7 @@
 
       This method typically emits `Progress`, `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
 
       Notes on `values`:
 
@@ -683,7 +725,7 @@
 
       This method typically emits `Progress`, `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
 
       Notes on `values`:
 
@@ -716,7 +758,7 @@
 
       This method typically emits `Progress`, `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
 
       Notes on `values`:
 
@@ -756,7 +798,7 @@
 
       This method typically emits `Progress`, `Error` and `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
 
       Notes on `values`:
 
@@ -812,7 +854,7 @@
       This method typically emits `Progress`, `Status` and `Error` and
       `Packages`.
 
-      `Packages` info enumerated types should be `available` or `installed`.
+      `Packages` info enumerated types should be `available`, `installed` or `residual`.
     -->
     <method name="WhatProvides">
       <annotation name="org.freedesktop.DBus.GLib.Async" value=""/>
@@ -880,12 +922,19 @@
 
       Notes on `data`:
 
-      - `package_id`: The package ID [`s`]
+      - `package-id`: The package ID [`s`]
       - `license`: The license string, e.g. `GPLv2+` [`s`]
       - `group`: The enumerated package group description [`u`]
-      - `detail`: The multi-line package description in markdown syntax.[`s`]
+      - `description`: The multi-line package description in markdown
+        syntax. [`s`]
       - `url`: The upstream project homepage [`s`]
       - `size`: The size of the package in bytes [`t`]
+      - `download-size`: The number of bytes that have to be downloaded to
+        install the package on this system, including dependencies that are
+        not yet installed, as far as the backend can determine this cheaply.
+        Backends that cannot account for dependencies report the download
+        size of the package itself. Clients that need an exact figure should
+        simulate an `InstallPackages` transaction instead. [`t`]
       - `summary`: The one line package summary, e.g. Clipart for LibreOffice
         [`s`]
     -->
@@ -912,14 +961,19 @@
     <!--*********************************************************************-->
     <!--
       Files:
-      @package_id: The Package ID that called the method.
-      @file_list: The file list as an array.
+      @package_id: The Package ID that called the method, or an empty string
+        for files downloaded by DownloadPackages.
+      @files: The file list; each entry is an absolute path without a trailing
+        slash and a PkFileKindEnum saying whether it is a regular file, a
+        directory owned by the package, a symbolic link, or unknown when the
+        backend has no such information.
 
       This signal is used to push file lists from the backend to the session.
     -->
     <signal name="Files">
       <arg type="s" name="package_id" direction="out"/>
-      <arg type="as" name="file_list" direction="out"/>
+      <arg type="a(su)" name="files" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantList"/>
     </signal>
 
     <!--*********************************************************************-->
@@ -1060,16 +1114,19 @@
     <!--*********************************************************************-->
     <!--
       RequireRestart:
-      @type: One of `system`, `application` or `session`.
-      @package_id: The package ID that caused the restart notifier.
+      @type: The required restart type, one of `system`, `session` or `application`.
+      @package_id: The package ID that caused the restart to be required.
 
       This signal is sent when the session program should notify the user that
-      a restart is required.
+      a restart is required to complete the transaction.
 
       This is optional, but highly recommended.
 
-      This can be sent as many times as needed by the backend script.
-      PackageKit will always choose the 'worst' method in the UI notification.
+      The backend may send this as many times as needed, usually once per
+      package. Clients should act on the most severe restart type they
+      received during a transaction. A required `system` restart is also
+      recorded in the RebootRequired property of the daemon until the next
+      boot.
     -->
     <signal name="RequireRestart">
       <arg type="u" name="type" direction="out"/>
@@ -1078,28 +1135,38 @@
 
     <!--*********************************************************************-->
     <!--
-      Transaction:
-      @object_path: The transaction ID of the old transaction.
-      @timespec: The timespec of the old transaction in ISO8601 format.
-      @succeeded: If the transaction succeeded.
-      @role: The role enumerated type.
-      @duration: The duration of the transaction in milliseconds.
-      @data: Any data associated with the transaction.
-      @uid: The user ID of the user that scheduled the action.
-      @cmdline: The command line of the tool that scheduled the action, e.g. `/usr/bin/gpk-application`.
+      History:
+      @items: An array of history items, each array element is one past transaction.
 
-      This signal is sent when more details are required about a specific
-      transaction.
+      This signal is sent in response to `GetHistory`.
+
+      The daemon may split the history into multiple emissions of this
+      signal to stay within the D-Bus message size limits. The content of one
+      signal will never duplicate the content of another, and a single
+      emission may contain only one transaction.
+
+      Each array element describes one past transaction as a struct: the
+      transaction ID followed by a vardict with the remaining fields.
+      A key whose value is unset, unknown or empty is omitted.
+      Clients must ignore keys they do not know and treat enum values
+      they do not recognize as that enum's unknown value.
+
+      - `time-started`: The ISO 8601 encoded time the transaction was started. [`s`]
+      - `succeeded`: If the transaction succeeded. Always present. [`b`]
+      - `role`: The role enumerated type. [`u`]
+      - `duration`: The duration of the transaction in milliseconds. Always
+        present. [`u`]
+      - `packages`: The packages the transaction acted on, as an array of
+        `(info, package_id, summary)` with the same meaning as in the
+        `Packages` signal. Only recorded for install, update and remove
+        transactions. [`a(uss)`]
+      - `uid`: The user ID of the user that scheduled the action. [`u`]
+      - `cmdline`: The command line of the tool that scheduled the action, e.g.
+        `/usr/bin/gpk-application`. [`s`]
     -->
-    <signal name="Transaction">
-      <arg type="o" name="object_path" direction="out"/>
-      <arg type="s" name="timespec" direction="out"/>
-      <arg type="b" name="succeeded" direction="out"/>
-      <arg type="u" name="role" direction="out"/>
-      <arg type="u" name="duration" direction="out"/>
-      <arg type="s" name="data" direction="out"/>
-      <arg type="u" name="uid" direction="out"/>
-      <arg type="s" name="cmdline" direction="out"/>
+    <signal name="History">
+      <arg type="a(oa{sv})" name="items" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantList"/>
     </signal>
 
 
@@ -1116,31 +1183,39 @@
       The content of one signal will never duplicate the content of another,
       and a single emission may contain only one update.
 
-      Each array element describes one update and consists of the following
-      fields:
+      Each array element describes one update as a struct: the package ID
+      followed by a dictionary with the remaining fields.
+      A key whose value is unset, unknown or empty is omitted, so an absent
+      key means that the backend did not report the field.
+      Clients must ignore keys they do not know and treat enum values
+      they do not recognise as that enum's unknown value.
 
-      - `package_id`: The package ID [`s`]
       - `updates`: A list of package_id's that are to be updated. [`as`]
       - `obsoletes`: A list of package_id's that are to be obsoleted. [`as`]
-      - `vendor_urls`: A list of URLs with more details on the update, e.g. a
-        page with more information on the update. [`as`]
-      - `bugzilla_urls`: A list of bugzilla URL with more details on the
-        update. If no URLs are available then this field should be left empty.
-        [`as`]
-      - `cve_urls`: A list of CVE URLs with more details on the security
-        advisory. [`as`]
+      - `issues`: The issue references of the update, see below. [`aa{sv}`]
       - `restart`: A valid restart type, e.g. `system`. [`u`]
-      - `update_text`: The update text describing the update. If formatting is
+      - `update-text`: The update text describing the update. If formatting is
         required, then markdown syntax should be used, e.g. `This is
         **critically** important` [`s`]
       - `changelog`: The ChangeLog text describing the changes since the last
         version. [`s`]
       - `state`: The state of the update, e.g. `stable` or `testing`. [`u`]
-      - `issued`: The ISO8601 encoded date that the update was issued. [`s`]
-      - `updated`: The ISO8601 encoded date that the update was updated. [`s`]
+      - `time-issued`: The ISO 8601 encoded time that the update was issued. [`s`]
+
+      Each element of `issues` describes an issue that this update resolves,
+      as a dictionary with these keys:
+
+      - `kind`: What is referenced, as a `PkIssueKindEnum` value: `generic`
+        (1) for an issue tracker entry from any tracker, `cve` (2) for a CVE
+        record or CVE tracker page, `advisory` (3) for the distributor's own
+        advisory page about the update. Always present. [`u`]
+      - `url`: Where a user can read about the issue. Always present. [`s`]
+      - `id`: A short identifier for display, e.g. the bug number or the CVE
+        name. [`s`]
+      - `title`: A one-line summary of the issue, not of the update. [`s`]
     -->
     <signal name="UpdateDetails">
-      <arg type="a(sasasasasasussuss)" name="details" direction="out"/>
+      <arg type="a(sa{sv})" name="details" direction="out"/>
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantList"/>
     </signal>
 

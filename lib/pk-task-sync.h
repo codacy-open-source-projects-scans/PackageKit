@@ -19,7 +19,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_TASK_SYNC_H
@@ -131,14 +131,14 @@ PkResults *pk_task_get_updates_sync (PkTask	       *task,
 				     gpointer		progress_user_data,
 				     GError	      **error);
 
-PkResults *pk_task_depends_on_sync (PkTask	      *task,
-				    PkBitfield	       filters,
-				    gchar	     **package_ids,
-				    gboolean	       recursive,
-				    GCancellable      *cancellable,
-				    PkProgressCallback progress_callback,
-				    gpointer	       progress_user_data,
-				    GError	     **error);
+PkResults *pk_task_get_dependencies_sync (PkTask	    *task,
+					  PkBitfield	     filters,
+					  gchar		   **package_ids,
+					  gboolean	     recursive,
+					  GCancellable	    *cancellable,
+					  PkProgressCallback progress_callback,
+					  gpointer	     progress_user_data,
+					  GError	   **error);
 
 PkResults *pk_task_get_packages_sync (PkTask		*task,
 				      PkBitfield	 filters,
@@ -147,14 +147,14 @@ PkResults *pk_task_get_packages_sync (PkTask		*task,
 				      gpointer		 progress_user_data,
 				      GError	       **error);
 
-PkResults *pk_task_required_by_sync (PkTask	       *task,
-				     PkBitfield		filters,
-				     gchar	      **package_ids,
-				     gboolean		recursive,
-				     GCancellable      *cancellable,
-				     PkProgressCallback progress_callback,
-				     gpointer		progress_user_data,
-				     GError	      **error);
+PkResults *pk_task_get_dependents_sync (PkTask		  *task,
+					PkBitfield	   filters,
+					gchar		 **package_ids,
+					gboolean	   recursive,
+					GCancellable	  *cancellable,
+					PkProgressCallback progress_callback,
+					gpointer	   progress_user_data,
+					GError		 **error);
 
 PkResults *pk_task_what_provides_sync (PkTask		 *task,
 				       PkBitfield	  filters,

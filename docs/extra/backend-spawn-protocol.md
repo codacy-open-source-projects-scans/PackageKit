@@ -102,9 +102,8 @@ is a failure that should never happen:
 ```json
 {"op":"run","job":"42","role":"search-name",
  "filters":["installed","~devel"],"values":["power manager"],
- "ctx":{"locale":"de_DE.UTF-8","uid":1000,"network":true,"background":false,
-        "interactive":true,"cache_age":86400,"details_with_deps_size":false,
-        "frontend_socket":null,
+ "ctx":{"locale":"de_DE.UTF-8","uid":1000,"background":false,
+        "interactive":true,"cache_age":86400,
         "proxy":{"http":"http://proxy.example.org:3128","no_proxy":"localhost"},
         "accepted_eulas":["vendor-eula-1"]}}
 ```
@@ -121,12 +120,9 @@ is a failure that should never happen:
 |--------------------------|-----------------|-------------------------------------------------------------------------------------------------------------------|
 | `locale`                 | string          | Client locale, e.g. `"C"`.                                                                                        |
 | `uid`                    | integer         | Client's Unix user id.                                                                                            |
-| `network`                | boolean         | Whether the daemon believes the system is online.                                                                 |
 | `background`             | boolean         | Low-priority transaction. The daemon already lowered the helper's priority if it started it for a background job. |
 | `interactive`            | boolean         | A user can answer questions.                                                                                      |
 | `cache_age`              | integer or null | Maximum metadata age in seconds, `null` for no limit.                                                             |
-| `details_with_deps_size` | boolean         | For `get-details`, include dependency sizes in `download_size`.                                                   |
-| `frontend_socket`        | string or null  | Path of the client's frontend socket (debconf), if any.                                                           |
 | `proxy`                  | object          | Keys `http`, `https`, `ftp`, `socks`, `no_proxy`, `pac`; absent means unset.                                      |
 | `accepted_eulas`         | array of string | EULA ids the user has accepted.                                                                                   |
 
@@ -136,9 +132,9 @@ Role-specific fields (package ids are `name;version;arch;origin;data`):
 |--------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
 | `search-name`, `search-details`, `search-group`, `search-file`, `what-provides`, `resolve` | `filters`, `values` (array of string)                                  |
 | `get-packages`, `get-updates`, `get-repo-list`                                             | `filters`                                                              |
-| `depends-on`, `required-by`                                                                | `filters`, `package_ids`, `recursive` (boolean)                        |
+| `get-dependencies`, `get-dependents`                                                                | `filters`, `package_ids`, `recursive` (boolean)                        |
 | `get-details`, `get-files`, `get-update-detail`                                            | `package_ids`                                                          |
-| `get-details-local`, `get-files-local`                                                     | `files` (array of absolute paths)                                      |
+| `get-details-local`, `get-files-local`                                                     | `files` (array of absolute paths, see below)                           |
 | `get-distro-upgrades`                                                                      | none                                                                   |
 | `download-packages`                                                                        | `package_ids`, `directory`                                             |
 | `install-packages`, `update-packages`                                                      | `flags`, `package_ids`                                                 |
@@ -151,6 +147,11 @@ Role-specific fields (package ids are `name;version;arch;origin;data`):
 | `repo-remove`                                                                              | `flags`, `repo_id`, `autoremove` (boolean)                             |
 | `upgrade-system`                                                                           | `flags`, `distro_id`, `upgrade_kind` (`enum_upgrade_kind`)             |
 | `repair-system`                                                                            | `flags`                                                                |
+
+`files` names private copies the daemon made of the files the client sent
+over D-Bus as file descriptors, in a directory only root can read. They are
+removed when the transaction is destroyed, so a helper must not rely on them
+staying around after the job.
 
 A role the helper did not list in `hello` is answered with `error`
 `not-supported`; the daemon does not send such requests normally.
@@ -251,22 +252,26 @@ Items already emitted for the job are dropped.
 
 `update-details`: `pk_backend_job_update_details`. `restart` is
 `enum_restart`, `state` is `enum_update_state`; the arrays, `update_text`,
-`changelog` and the ISO 8601 timestamps `issued` and `updated` are optional.
+`changelog` and the ISO 8601 timestamp `time_issued` are optional.
+Each item of `issues` has a `kind` and a `url`, plus an optional `id` and `title`.
 
 ```json
 {"ev":"update-details","job":"42","items":[
   {"package_id":"foo;1.1;x86_64;main;","updates":["foo;1.0;x86_64;installed;"],"obsoletes":[],
-   "vendor_urls":["https://example.org/advisory/1"],"bugzilla_urls":[],
-   "cve_urls":["https://www.cve.org/CVERecord?id=CVE-2026-0001"],
+   "issues":[{"kind":"advisory","url":"https://example.org/advisory/1"},
+             {"kind":"cve","url":"https://www.cve.org/CVERecord?id=CVE-2026-0001","id":"CVE-2026-0001"}],
    "restart":"none","update_text":"Fixes a crash.","changelog":"* 1.1: fix crash",
-   "state":"stable","issued":"2026-09-01T10:00:00Z","updated":"2026-09-02T12:30:00Z"}]}
+   "state":"stable","time_issued":"2026-09-01T10:00:00Z"}]}
 ```
 
-`files`: `pk_backend_job_files`. For `download-packages`, `package_id` may
-be `null` and `files` lists the downloaded paths.
+`files`: `pk_backend_job_files`. `files` maps each path to an `enum_file_kind`
+(`file`, `dir`, `link`, or `any` when the metadata does not say).
+For `download-packages`, `package_id` may be `null` and `files` lists the
+downloaded paths.
 
 ```json
-{"ev":"files","job":"42","package_id":"foo;1.0;x86_64;main;","files":["/usr/bin/foo","/usr/share/doc/foo"]}
+{"ev":"files","job":"42","package_id":"foo;1.0;x86_64;main;",
+ "files":{"/usr/bin/foo":"file","/usr/share/doc/foo":"dir"}}
 ```
 
 `repo-details`: `pk_backend_job_repo_detail` per item; `description` is
@@ -336,7 +341,7 @@ Ends the job; later events for the same id are ignored.
 ```
 → {"op":"hello","protocol":1,"daemon_version":"2.0.0"}
 ← {"ev":"hello","protocol":1,"name":"example","roles":["search-name","install-packages"],"filters":["installed"],"groups":[],"mime_types":[],"parallel":false}
-→ {"op":"run","job":"1","role":"search-name","filters":["~installed"],"values":["foo"],"ctx":{"locale":"C","uid":1000,"network":true,"background":false,"interactive":true,"cache_age":null,"details_with_deps_size":false,"frontend_socket":null,"proxy":{},"accepted_eulas":[]}}
+→ {"op":"run","job":"1","role":"search-name","filters":["~installed"],"values":["foo"],"ctx":{"locale":"C","uid":1000,"background":false,"interactive":true,"cache_age":null,"proxy":{},"accepted_eulas":[]}}
 ← {"ev":"status","job":"1","status":"query"}
 ← {"ev":"packages","job":"1","items":[{"package_id":"foo;1.0;x86_64;main;","info":"available","summary":"A foo"}]}
 ← {"ev":"finished","job":"1"}

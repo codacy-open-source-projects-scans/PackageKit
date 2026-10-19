@@ -1,6 +1,7 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
  * Copyright (C) 2009 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2026 Matthias Klumpp <matthias@tenstral.net>
  *
  * Licensed under the GNU Lesser General Public License Version 2.1
  *
@@ -19,7 +20,7 @@
  */
 
 #if !defined(__PACKAGEKIT_H_INSIDE__) && !defined(PK_COMPILATION)
-#error "Only <packagekit-glib2/packagekit.h> can be included directly."
+#error "Only <packagekit/packagekit.h> can be included directly."
 #endif
 
 #ifndef __PK_PACKAGE_SACK_H
@@ -118,6 +119,8 @@ gboolean       pk_package_sack_add_package_by_id (PkPackageSack *sack,
 gboolean       pk_package_sack_add_packages_from_file (PkPackageSack *sack,
 						       GFile	     *file,
 						       GError	    **error);
+gboolean       pk_package_sack_replace_package (PkPackageSack *sack,
+						PkPackage     *package);
 gboolean       pk_package_sack_to_file (PkPackageSack *sack,
 					GFile	      *file,
 					GError	     **error);

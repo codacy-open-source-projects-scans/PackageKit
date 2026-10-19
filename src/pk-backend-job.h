@@ -23,6 +23,7 @@
 #define __PK_BACKEND_JOB_H
 
 #include <glib-object.h>
+#include <gio/gunixfdlist.h>
 
 #include "pk-shared.h"
 #include <pk-bitfield.h>
@@ -130,9 +131,19 @@ const gchar  *pk_backend_job_get_pac (PkBackendJob *job);
 const gchar  *pk_backend_job_get_locale (PkBackendJob *job);
 const gchar  *pk_backend_job_get_frontend_socket (PkBackendJob *job);
 guint	      pk_backend_job_get_cache_age (PkBackendJob *job);
-gboolean      pk_backend_job_get_details_with_deps_size (PkBackendJob *job);
-void	      pk_backend_job_set_details_with_deps_size (PkBackendJob *job,
-							 gboolean      details_with_deps_size);
+void	      pk_backend_job_set_file_fds (PkBackendJob *job,
+					   GUnixFDList	*fds);
+gboolean      pk_backend_job_stage_files (PkBackendJob *job,
+					  GError      **error);
+gint	      pk_backend_job_get_file_fd (PkBackendJob *job,
+					  gint32	handle,
+					  GError      **error);
+const gchar  *pk_backend_job_get_file_path (PkBackendJob *job,
+					    gint32	  handle,
+					    GError	**error);
+gchar	    **pk_backend_job_get_file_paths (PkBackendJob *job,
+					     GVariant	  *handles,
+					     GError	 **error);
 
 /* transaction vfuncs */
 typedef void (*PkBackendJobVFunc) (PkBackendJob *job,
@@ -191,7 +202,7 @@ void	       pk_backend_job_details (PkBackendJob *job,
 				       guint64	     download_size);
 void	       pk_backend_job_files (PkBackendJob *job,
 				     const gchar  *package_id,
-				     gchar	 **files);
+				     GPtrArray	  *files);
 void	       pk_backend_job_distro_upgrade (PkBackendJob	 *job,
 					      PkDistroUpgradeEnum type,
 					      const gchar	 *name,

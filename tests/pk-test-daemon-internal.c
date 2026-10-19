@@ -21,6 +21,9 @@
 
 #include <config.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <gio/gunixfdlist.h>
 #include <glib.h>
 #include <glib-object.h>
 #include <glib/gstdio.h>
@@ -30,6 +33,7 @@
 #include "pk-backend-protocol.h"
 #include "pk-dbus.h"
 #include "pk-engine.h"
+#include "pk-proxy-store.h"
 #include "pk-transaction-db.h"
 #include "pk-transaction.h"
 #include "pk-transaction-private.h"
@@ -79,6 +83,44 @@ pk_test_remove_transaction_db (void)
 		g_debug ("Removing %s", filename);
 		g_assert_cmpint (g_unlink (filename), ==, 0);
 	}
+}
+
+/*
+ * pk_test_reboot_state_func:
+ *
+ * The required-restart state is a key file in the runtime directory that
+ * transactions append to and the engine reads back.
+ */
+static void
+pk_test_reboot_state_func (void)
+{
+	g_autoptr(GKeyFile) conf = pk_test_conf_new ();
+	g_autoptr(GError) error = NULL;
+	g_auto(GStrv) ids = NULL;
+	g_autofree gchar *root_dir = g_dir_make_tmp ("pk-test-reboot-XXXXXX", &error);
+
+	g_assert_no_error (error);
+	g_key_file_set_string (conf, "Daemon", "RootDir", root_dir);
+
+	/* nothing recorded */
+	g_assert_null (pk_util_reboot_state_load (conf));
+
+	/* record a package twice, and another one */
+	g_assert_true (pk_util_reboot_state_add (conf, "kernel;1;x86_64;fedora", &error));
+	g_assert_no_error (error);
+	g_assert_true (pk_util_reboot_state_add (conf, "kernel;1;x86_64;fedora", &error));
+	g_assert_no_error (error);
+	g_assert_true (pk_util_reboot_state_add (conf, "glibc;2;x86_64;fedora", &error));
+	g_assert_no_error (error);
+
+	ids = pk_util_reboot_state_load (conf);
+	g_assert_nonnull (ids);
+	g_assert_cmpuint (g_strv_length (ids), ==, 2);
+	g_assert_cmpstr (ids[0], ==, "kernel;1;x86_64;fedora");
+	g_assert_cmpstr (ids[1], ==, "glibc;2;x86_64;fedora");
+
+	g_assert_true (pk_directory_remove_contents (root_dir));
+	g_assert_cmpint (g_rmdir (root_dir), ==, 0);
 }
 
 /** ver:1.0 ***********************************************************/
@@ -651,6 +693,49 @@ pk_test_backend_protocol_job_new (GKeyFile *conf)
 }
 
 static void
+pk_test_backend_job_files_cb (PkBackendJob *job, PkFiles *item, gpointer user_data)
+{
+	PkFiles **out = user_data;
+	*out = g_object_ref (item);
+}
+
+#define FILE_PATH(files, i) pk_file_get_path (g_ptr_array_index (files, i))
+#define FILE_KIND(files, i) pk_file_get_kind (g_ptr_array_index (files, i))
+
+/* trailing slashes mark directories and are stripped; everything else is passed through */
+static void
+pk_test_backend_job_files_func (void)
+{
+	g_autoptr(GKeyFile) conf = pk_test_conf_new ();
+	g_autoptr(PkBackendJob) job = pk_backend_job_new (conf);
+	g_autoptr(PkFiles) item = NULL;
+	g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+	GPtrArray *out;
+
+	g_ptr_array_add (files, pk_file_new ("/", PK_FILE_KIND_ENUM_UNKNOWN));
+	g_ptr_array_add (files, pk_file_new ("/usr/share/doc/", PK_FILE_KIND_ENUM_UNKNOWN));
+	g_ptr_array_add (files, pk_file_new ("/etc", PK_FILE_KIND_ENUM_SYMLINK));
+
+	pk_backend_job_set_vfunc (job,
+				  PK_BACKEND_SIGNAL_FILES,
+				  PK_BACKEND_JOB_VFUNC (pk_test_backend_job_files_cb),
+				  &item);
+
+	pk_backend_job_files (job, "foo;1.0;x86_64;main;", files);
+	while (g_main_context_iteration (NULL, FALSE))
+		;
+	g_assert_nonnull (item);
+	out = pk_files_get_files (item);
+	g_assert_cmpuint (out->len, ==, 3);
+	g_assert_cmpstr (FILE_PATH (out, 0), ==, "/");
+	g_assert_cmpstr (FILE_PATH (out, 1), ==, "/usr/share/doc");
+	g_assert_cmpstr (FILE_PATH (out, 2), ==, "/etc");
+	g_assert_cmpint (FILE_KIND (out, 0), ==, PK_FILE_KIND_ENUM_UNKNOWN);
+	g_assert_cmpint (FILE_KIND (out, 1), ==, PK_FILE_KIND_ENUM_DIRECTORY);
+	g_assert_cmpint (FILE_KIND (out, 2), ==, PK_FILE_KIND_ENUM_SYMLINK);
+}
+
+static void
 pk_test_backend_protocol_func (void)
 {
 	g_autoptr(GKeyFile) conf = pk_test_conf_new ();
@@ -1049,6 +1134,75 @@ pk_test_transaction_func (void)
 }
 
 static void
+pk_test_proxy_store_func (void)
+{
+	gboolean ret;
+	g_autoptr(GKeyFile) conf = pk_test_conf_new ();
+	g_autoptr(GError) error = NULL;
+	const gchar *session = "/org/freedesktop/logind/session-7";
+	g_autofree gchar *dir = pk_util_get_runtime_dir (conf, NULL);
+	g_autofree gchar *session_file = g_build_filename (dir, "proxy-session-7", NULL);
+	g_autofree gchar *uid_file = g_build_filename (dir, "proxy-uid-501", NULL);
+	g_autoptr(PkProxySettings) settings = NULL;
+	g_autoptr(PkProxySettings) loaded = NULL;
+
+	g_unlink (session_file);
+	g_unlink (uid_file);
+
+	/* nothing stored yet */
+	ret = pk_proxy_store_load (conf, 500, session, &loaded, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_null (loaded);
+
+	/* save, then read back for the same session only */
+	settings = pk_proxy_settings_new ("127.0.0.1:80", "", "127.0.0.1:21", NULL, NULL, NULL);
+	ret = pk_proxy_store_save (conf, 500, session, settings, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_true (g_file_test (session_file, G_FILE_TEST_IS_REGULAR));
+
+	ret = pk_proxy_store_load (conf, 500, session, &loaded, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_nonnull (loaded);
+	g_assert_cmpstr (loaded->http, ==, "127.0.0.1:80");
+	g_assert_cmpstr (loaded->https, ==, NULL);
+	g_assert_cmpstr (loaded->ftp, ==, "127.0.0.1:21");
+	g_assert_true (pk_proxy_settings_equal (settings, loaded));
+	g_clear_pointer (&loaded, pk_proxy_settings_free);
+
+	ret = pk_proxy_store_load (conf, 500, "/org/freedesktop/logind/session-8", &loaded, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_null (loaded);
+
+	/* empty settings remove the file again */
+	g_clear_pointer (&settings, pk_proxy_settings_free);
+	settings = pk_proxy_settings_new ("", "", "", "", "", "");
+	g_assert_true (pk_proxy_settings_is_empty (settings));
+	g_assert_true (pk_proxy_settings_equal (settings, NULL));
+	ret = pk_proxy_store_save (conf, 500, session, settings, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_false (g_file_test (session_file, G_FILE_TEST_EXISTS));
+
+	/* a caller without a session is keyed by uid */
+	g_clear_pointer (&settings, pk_proxy_settings_free);
+	settings = pk_proxy_settings_new (NULL, NULL, NULL, "localhost:1080", NULL, NULL);
+	ret = pk_proxy_store_save (conf, 501, NULL, settings, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_true (g_file_test (uid_file, G_FILE_TEST_IS_REGULAR));
+	ret = pk_proxy_store_load (conf, 501, NULL, &loaded, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	g_assert_nonnull (loaded);
+	g_assert_cmpstr (loaded->socks, ==, "localhost:1080");
+	g_unlink (uid_file);
+}
+
+static void
 pk_test_transaction_db_func (void)
 {
 	guint value;
@@ -1058,8 +1212,6 @@ pk_test_transaction_db_func (void)
 	GError *error = NULL;
 	g_autoptr(PkTransactionDb) db = NULL;
 	g_autoptr(GKeyFile) conf = pk_test_conf_new ();
-	g_autofree gchar *proxy_http = NULL;
-	g_autofree gchar *proxy_ftp = NULL;
 
 	/* remove the self check file */
 	pk_test_remove_transaction_db ();
@@ -1114,71 +1266,34 @@ pk_test_transaction_db_func (void)
 	g_assert_cmpint (value, >, 1);
 	g_assert_cmpint (value, <=, 4);
 
-	/* can we set the proxies */
-	ret = pk_transaction_db_set_proxy (db,
-					   500,
-					   "session1",
-					   "127.0.0.1:80",
-					   NULL,
-					   "127.0.0.1:21",
-					   NULL,
-					   NULL,
-					   NULL);
-	g_assert_true (ret);
+	/* does the stored package list come back as package objects */
+	{
+		g_autoptr(GList) list = NULL;
+		GPtrArray *packages;
+		PkPackage *pkg;
 
-	/* can we set the proxies (overwrite) */
-	ret = pk_transaction_db_set_proxy (db,
-					   500,
-					   "session1",
-					   "127.0.0.1:80",
-					   NULL,
-					   "127.0.0.1:21",
-					   NULL,
-					   NULL,
-					   NULL);
-	g_assert_true (ret);
-
-	/* can we get the proxies (non-existant user) */
-	ret = pk_transaction_db_get_proxy (db,
-					   501,
-					   "session1",
-					   &proxy_http,
-					   NULL,
-					   &proxy_ftp,
-					   NULL,
-					   NULL,
-					   NULL);
-	g_assert_true (ret);
-	g_assert_cmpstr (proxy_http, ==, NULL);
-	g_assert_cmpstr (proxy_ftp, ==, NULL);
-
-	/* can we get the proxies (non-existant session) */
-	ret = pk_transaction_db_get_proxy (db,
-					   500,
-					   "session2",
-					   &proxy_http,
-					   NULL,
-					   &proxy_ftp,
-					   NULL,
-					   NULL,
-					   NULL);
-	g_assert_true (ret);
-	g_assert_cmpstr (proxy_http, ==, NULL);
-	g_assert_cmpstr (proxy_ftp, ==, NULL);
-
-	/* can we get the proxies (match) */
-	ret = pk_transaction_db_get_proxy (db,
-					   500,
-					   "session1",
-					   &proxy_http,
-					   NULL,
-					   &proxy_ftp,
-					   NULL,
-					   NULL,
-					   NULL);
-	g_assert_true (ret);
-	g_assert_cmpstr (proxy_http, ==, "127.0.0.1:80");
-	g_assert_cmpstr (proxy_ftp, ==, "127.0.0.1:21");
+		tid = pk_transaction_db_generate_id (db);
+		g_assert_true (pk_transaction_db_add (db, tid));
+		g_assert_true (
+		    pk_transaction_db_set_data (db,
+						tid,
+						"installing\tfoo;1.0;x86_64;fedora;\tFoo summary\n"
+						"removing\tbar;2.0;noarch;;\t"));
+		g_free (tid);
+		list = pk_transaction_db_get_list (db, 0);
+		g_assert_cmpint (g_list_length (list), ==, 1);
+		packages = pk_history_item_get_packages (PK_HISTORY_ITEM (list->data));
+		g_assert_nonnull (packages);
+		g_assert_cmpint (packages->len, ==, 2);
+		pkg = g_ptr_array_index (packages, 0);
+		g_assert_cmpint (pk_package_get_info (pkg), ==, PK_INFO_ENUM_INSTALLING);
+		g_assert_cmpstr (pk_package_get_id (pkg), ==, "foo;1.0;x86_64;fedora;");
+		g_assert_cmpstr (pk_package_get_summary (pkg), ==, "Foo summary");
+		pkg = g_ptr_array_index (packages, 1);
+		g_assert_cmpint (pk_package_get_info (pkg), ==, PK_INFO_ENUM_REMOVING);
+		g_assert_cmpstr (pk_package_get_id (pkg), ==, "bar;2.0;noarch;;");
+		g_list_free_full (g_steal_pointer (&list), g_object_unref);
+	}
 }
 
 static PkTransactionDb *db = NULL;
@@ -1244,13 +1359,36 @@ pk_test_spawn_module_details_cb (PkBackendJob *job, PkDetails *item, gpointer us
 static void
 pk_test_spawn_module_update_details_cb (PkBackendJob *job, GPtrArray *items, gpointer user_data)
 {
+	for (guint i = 0; i < items->len; i++) {
+		PkUpdateDetail *item = g_ptr_array_index (items, i);
+		GPtrArray *issues = pk_update_detail_get_issues (item);
+		PkIssue *issue;
+
+		g_assert_cmpstr (pk_update_detail_get_time_issued (item),
+				 ==,
+				 "2026-01-01T00:00:00Z");
+		g_assert_nonnull (issues);
+		g_assert_cmpuint (issues->len, ==, 1);
+		issue = g_ptr_array_index (issues, 0);
+		g_assert_cmpint (pk_issue_get_kind (issue), ==, PK_ISSUE_KIND_ENUM_CVE);
+		g_assert_cmpstr (pk_issue_get_id (issue), ==, "CVE-2026-0001");
+		g_assert_null (pk_issue_get_title (issue));
+	}
 	sm_update_details += items->len;
 }
 
 static void
 pk_test_spawn_module_files_cb (PkBackendJob *job, PkFiles *item, gpointer user_data)
 {
-	g_assert_cmpuint (g_strv_length (pk_files_get_files (item)), ==, 2);
+	GPtrArray *files = pk_files_get_files (item);
+	g_assert_cmpuint (files->len, ==, 2);
+	g_assert_cmpstr (pk_file_get_path (g_ptr_array_index (files, 0)), ==, "/usr/bin/foo");
+	g_assert_cmpint (pk_file_get_kind (g_ptr_array_index (files, 0)),
+			 ==,
+			 PK_FILE_KIND_ENUM_REGULAR);
+	g_assert_cmpint (pk_file_get_kind (g_ptr_array_index (files, 1)),
+			 ==,
+			 PK_FILE_KIND_ENUM_DIRECTORY);
 	sm_files++;
 }
 
@@ -1948,7 +2086,7 @@ pk_test_scheduler_parallel_func (void)
 	pk_transaction_skip_auth_checks (transaction1, TRUE);
 	pk_transaction_install_packages (
 	    transaction1,
-	    g_variant_new ("(t^as)", pk_bitfield_value (PK_FILTER_ENUM_NONE), array),
+	    g_variant_new ("(t^as)", pk_bitfield_value (PK_TRANSACTION_FLAG_ENUM_NONE), array),
 	    NULL);
 	g_strfreev (array);
 
@@ -1967,7 +2105,7 @@ pk_test_scheduler_parallel_func (void)
 	pk_transaction_skip_auth_checks (transaction1, TRUE);
 	pk_transaction_install_packages (
 	    transaction1,
-	    g_variant_new ("(t^as)", pk_bitfield_value (PK_FILTER_ENUM_NONE), array),
+	    g_variant_new ("(t^as)", pk_bitfield_value (PK_TRANSACTION_FLAG_ENUM_NONE), array),
 	    NULL);
 	g_strfreev (array);
 
@@ -2067,23 +2205,132 @@ pk_test_scheduler_parallel_func (void)
 	g_object_unref (db);
 }
 
+static void
+pk_test_backend_job_staged_files_func (void)
+{
+	const gchar *path;
+	gchar buf[4] = { 0 };
+	gint fd;
+	gint pipefd[2];
+	g_autofree gchar *root = NULL;
+	g_autofree gchar *rpm = NULL;
+	g_autofree gchar *txt = NULL;
+	g_autofree gchar *contents = NULL;
+	g_autofree gchar *handle_dir = NULL;
+	g_autofree gchar *staging_dir = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GKeyFile) conf = pk_test_conf_new ();
+	g_autoptr(GUnixFDList) fds = g_unix_fd_list_new ();
+	g_autoptr(PkBackend) backend = NULL;
+	PkBackendJob *job;
+
+	/* the backend module lives below the test root, the staging dir below ours */
+	g_key_file_set_string (conf, "Daemon", "DefaultBackend", "dummy");
+	backend = pk_backend_new (conf);
+	g_assert_true (pk_backend_load (backend, &error));
+	g_assert_no_error (error);
+	root = g_dir_make_tmp ("pk-test-root-XXXXXX", &error);
+	g_assert_no_error (error);
+	g_key_file_set_string (conf, "Daemon", "RootDir", root);
+	rpm = g_build_filename (root, "powertop-1.8-1.fc8.rpm", NULL);
+	txt = g_build_filename (root, "notes.txt", NULL);
+	g_assert_true (g_file_set_contents (rpm, "not really an rpm", -1, NULL));
+	g_assert_true (g_file_set_contents (txt, "hello", -1, NULL));
+
+	/* handles: 0 and 3 a package file, 1 something else, 2 not a regular file */
+	fd = open (rpm, O_RDONLY | O_CLOEXEC);
+	g_assert_cmpint (g_unix_fd_list_append (fds, fd, NULL), ==, 0);
+	close (fd);
+	fd = open (txt, O_RDONLY | O_CLOEXEC);
+	g_assert_cmpint (g_unix_fd_list_append (fds, fd, NULL), ==, 1);
+	close (fd);
+	g_assert_cmpint (pipe (pipefd), ==, 0);
+	g_assert_cmpint (g_unix_fd_list_append (fds, pipefd[0], NULL), ==, 2);
+	close (pipefd[0]);
+	close (pipefd[1]);
+	fd = open (rpm, O_RDONLY | O_CLOEXEC);
+	g_assert_cmpint (g_unix_fd_list_append (fds, fd, NULL), ==, 3);
+	close (fd);
+
+	job = pk_backend_job_new (conf);
+	pk_backend_job_set_backend (job, backend);
+	pk_backend_job_set_file_fds (job, fds);
+
+	/* a package file is copied below the root, keeping its name */
+	path = pk_backend_job_get_file_path (job, 0, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (path);
+	g_assert_true (g_str_has_prefix (path, root));
+	g_assert_nonnull (g_strstr_len (path, -1, LOCALSTATEDIR "/cache/packagekit/staging/job-"));
+	g_assert_true (g_str_has_suffix (path, "/0/powertop-1.8-1.fc8.rpm"));
+	g_assert_true (g_file_get_contents (path, &contents, NULL, NULL));
+	g_assert_cmpstr (contents, ==, "not really an rpm");
+
+	/* a second lookup hits the copy again */
+	g_assert_cmpstr (pk_backend_job_get_file_path (job, 0, NULL), ==, path);
+
+	/* a backend that wants an fd gets the client's own, checked but not copied */
+	fd = pk_backend_job_get_file_fd (job, 3, &error);
+	g_assert_no_error (error);
+	g_assert_cmpint (fd, >=, 0);
+	g_assert_cmpint (read (fd, buf, 3), ==, 3);
+	g_assert_cmpstr (buf, ==, "not");
+	handle_dir = g_path_get_dirname (path);
+	staging_dir = g_path_get_dirname (handle_dir);
+	g_clear_pointer (&handle_dir, g_free);
+	handle_dir = g_build_filename (staging_dir, "3", NULL);
+	g_assert_false (g_file_test (handle_dir, G_FILE_TEST_EXISTS));
+
+	/* wrong content type, whichever way it is asked for */
+	g_assert_null (pk_backend_job_get_file_path (job, 1, &error));
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+	g_assert_nonnull (g_strstr_len (error->message, -1, "notes.txt"));
+	g_clear_error (&error);
+	g_assert_cmpint (pk_backend_job_get_file_fd (job, 1, &error), ==, -1);
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+	g_clear_error (&error);
+
+	/* a pipe is never read */
+	g_assert_cmpint (pk_backend_job_get_file_fd (job, 2, &error), ==, -1);
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_REGULAR_FILE);
+	g_clear_error (&error);
+
+	/* unknown handle */
+	g_assert_null (pk_backend_job_get_file_path (job, 4, &error));
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+	g_clear_error (&error);
+
+	/* the copies go away with the job */
+	g_assert_true (g_file_test (staging_dir, G_FILE_TEST_IS_DIR));
+	g_object_unref (job);
+	g_assert_false (g_file_test (staging_dir, G_FILE_TEST_EXISTS));
+
+	pk_directory_remove_contents (root);
+	g_rmdir (root);
+}
+
 int
 main (int argc, char **argv)
 {
 	g_test_init (&argc, &argv, NULL);
 
 	/* components */
+	g_test_add_func ("/packagekit/reboot-state", pk_test_reboot_state_func);
 	g_test_add_func ("/packagekit/transaction", pk_test_transaction_func);
 	g_test_add_func ("/packagekit/dbus", pk_test_dbus_func);
 	g_test_add_func ("/packagekit/backend-spawn", pk_test_backend_spawn_func);
+	g_test_add_func ("/packagekit/backend-job-files", pk_test_backend_job_files_func);
 	g_test_add_func ("/packagekit/backend-protocol", pk_test_backend_protocol_func);
 	g_test_add_func ("/packagekit/spawn-module", pk_test_spawn_module_func);
 	g_test_add_func ("/packagekit/scheduler", pk_test_scheduler_func);
 	g_test_add_func ("/packagekit/scheduler-parallel", pk_test_scheduler_parallel_func);
 	g_test_add_func ("/packagekit/transaction-db", pk_test_transaction_db_func);
+	g_test_add_func ("/packagekit/proxy-store", pk_test_proxy_store_func);
 
 	/* backend stuff */
 	g_test_add_func ("/packagekit/backend", pk_test_backend_func);
+	g_test_add_func ("/packagekit/backend-job-staged-files",
+			 pk_test_backend_job_staged_files_func);
 
 	return g_test_run ();
 }

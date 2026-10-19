@@ -22,9 +22,9 @@
 /**
  * SECTION:pk-enum
  * @title: Enumerations
- * @short_description: Enumerations used in packagekit-glib2
+ * @short_description: Enumerations used in libpackagekit
  *
- * Enumerated values used in packagekit-glib2 and functions for using these.
+ * Enumerated values used in libpackagekit and functions for using these.
  */
 
 #include "config.h"
@@ -92,14 +92,14 @@ static const PkEnumMatch enum_status[] = {
 static const PkEnumMatch enum_role[] = {
 	{PK_ROLE_ENUM_UNKNOWN,				"unknown"},	/* fall though value */
 	{PK_ROLE_ENUM_CANCEL,				"cancel"},
-	{PK_ROLE_ENUM_DEPENDS_ON,			"depends-on"},
+	{PK_ROLE_ENUM_GET_DEPENDENCIES,			"get-dependencies"},
 	{PK_ROLE_ENUM_GET_DETAILS,			"get-details"},
 	{PK_ROLE_ENUM_GET_DETAILS_LOCAL,		"get-details-local"},
 	{PK_ROLE_ENUM_GET_FILES_LOCAL,			"get-files-local"},
 	{PK_ROLE_ENUM_GET_FILES,			"get-files"},
 	{PK_ROLE_ENUM_GET_PACKAGES,			"get-packages"},
 	{PK_ROLE_ENUM_GET_REPO_LIST,			"get-repo-list"},
-	{PK_ROLE_ENUM_REQUIRED_BY,			"required-by"},
+	{PK_ROLE_ENUM_GET_DEPENDENTS,			"get-dependents"},
 	{PK_ROLE_ENUM_GET_UPDATE_DETAIL,		"get-update-detail"},
 	{PK_ROLE_ENUM_GET_UPDATES,			"get-updates"},
 	{PK_ROLE_ENUM_INSTALL_FILES,			"install-files"},
@@ -120,7 +120,7 @@ static const PkEnumMatch enum_role[] = {
 	{PK_ROLE_ENUM_ACCEPT_EULA,			"accept-eula"},
 	{PK_ROLE_ENUM_DOWNLOAD_PACKAGES,		"download-packages"},
 	{PK_ROLE_ENUM_GET_DISTRO_UPGRADES,		"get-distro-upgrades"},
-	{PK_ROLE_ENUM_GET_OLD_TRANSACTIONS,		"get-old-transactions"},
+	{PK_ROLE_ENUM_GET_HISTORY,		"get-history"},
 	{PK_ROLE_ENUM_REPAIR_SYSTEM,			"repair-system"},
 	{PK_ROLE_ENUM_UPGRADE_SYSTEM,			"upgrade-system"},
 	{0, NULL}
@@ -209,26 +209,26 @@ static const PkEnumMatch enum_filter[] = {
 	{PK_FILTER_ENUM_NONE,			"none"},
 	{PK_FILTER_ENUM_INSTALLED,		"installed"},
 	{PK_FILTER_ENUM_NOT_INSTALLED,		"~installed"},
+	{PK_FILTER_ENUM_NEWEST,			"newest"},
+	{PK_FILTER_ENUM_NOT_NEWEST,		"~newest"},
 	{PK_FILTER_ENUM_DEVELOPMENT,		"devel"},
 	{PK_FILTER_ENUM_NOT_DEVELOPMENT,	"~devel"},
-	{PK_FILTER_ENUM_GUI,			"gui"},
-	{PK_FILTER_ENUM_NOT_GUI,		"~gui"},
+	{PK_FILTER_ENUM_APPLICATION,		"application"},
+	{PK_FILTER_ENUM_NOT_APPLICATION,	"~application"},
 	{PK_FILTER_ENUM_FREE,			"free"},
 	{PK_FILTER_ENUM_NOT_FREE,		"~free"},
 	{PK_FILTER_ENUM_SUPPORTED,		"supported"},
 	{PK_FILTER_ENUM_NOT_SUPPORTED,		"~supported"},
 	{PK_FILTER_ENUM_BASENAME,		"basename"},
 	{PK_FILTER_ENUM_NOT_BASENAME,		"~basename"},
-	{PK_FILTER_ENUM_NEWEST,			"newest"},
-	{PK_FILTER_ENUM_NOT_NEWEST,		"~newest"},
 	{PK_FILTER_ENUM_ARCH,			"arch"},
 	{PK_FILTER_ENUM_NOT_ARCH,		"~arch"},
 	{PK_FILTER_ENUM_SOURCE,			"source"},
 	{PK_FILTER_ENUM_NOT_SOURCE,		"~source"},
-	{PK_FILTER_ENUM_APPLICATION,		"application"},
-	{PK_FILTER_ENUM_NOT_APPLICATION,	"~application"},
 	{PK_FILTER_ENUM_DOWNLOADED,		"downloaded"},
 	{PK_FILTER_ENUM_NOT_DOWNLOADED,		"~downloaded"},
+	{PK_FILTER_ENUM_RESIDUAL,		"residual"},
+	{PK_FILTER_ENUM_NOT_RESIDUAL,		"~residual"},
 	{0, NULL}
 };
 
@@ -294,9 +294,26 @@ static const PkEnumMatch enum_update_state[] = {
 	{0, NULL}
 };
 
+static const PkEnumMatch enum_issue_kind[] = {
+	{PK_ISSUE_KIND_ENUM_UNKNOWN,		"unknown"},	/* fall though value */
+	{PK_ISSUE_KIND_ENUM_GENERIC,		"generic"},
+	{PK_ISSUE_KIND_ENUM_CVE,		"cve"},
+	{PK_ISSUE_KIND_ENUM_ADVISORY,		"advisory"},
+	{0, NULL}
+};
+
+static const PkEnumMatch enum_file_kind[] = {
+	{PK_FILE_KIND_ENUM_UNKNOWN,		"any"},	/* fall though value */
+	{PK_FILE_KIND_ENUM_REGULAR,		"file"},
+	{PK_FILE_KIND_ENUM_DIRECTORY,		"dir"},
+	{PK_FILE_KIND_ENUM_SYMLINK,		"link"},
+	{0, NULL}
+};
+
 static const PkEnumMatch enum_info[] = {
 	{PK_INFO_ENUM_UNKNOWN,			"unknown"},	/* fall though value */
 	{PK_INFO_ENUM_AVAILABLE,		"available"},
+	{PK_INFO_ENUM_RESIDUAL,			"residual"},
 	{PK_INFO_ENUM_INSTALLED,		"installed"},
 	{PK_INFO_ENUM_BLOCKED,			"blocked"},
 	{PK_INFO_ENUM_UNTRUSTED,		"untrusted"},
@@ -343,16 +360,6 @@ static const PkEnumMatch enum_upgrade[] = {
 	{0, NULL}
 };
 
-static const PkEnumMatch enum_network[] = {
-	{PK_NETWORK_ENUM_UNKNOWN,		"unknown"},	/* fall though value */
-	{PK_NETWORK_ENUM_OFFLINE,		"offline"},
-	{PK_NETWORK_ENUM_ONLINE,		"online"},
-	{PK_NETWORK_ENUM_WIRED,			"wired"},
-	{PK_NETWORK_ENUM_WIFI,			"wifi"},
-	{PK_NETWORK_ENUM_MOBILE,		"mobile"},
-	{0, NULL}
-};
-
 static const PkEnumMatch enum_authorize_type[] = {
 	{PK_AUTHORIZE_ENUM_UNKNOWN,		"unknown"},	/* fall though value */
 	{PK_AUTHORIZE_ENUM_YES,			"yes"},
@@ -371,12 +378,20 @@ static const PkEnumMatch enum_upgrade_kind[] = {
 
 static const PkEnumMatch enum_transaction_flag[] = {
 	{PK_TRANSACTION_FLAG_ENUM_NONE,			"none"},	/* fall though value */
-	{PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED,		"only-trusted"},
 	{PK_TRANSACTION_FLAG_ENUM_SIMULATE,		"simulate"},
+	{PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED,		"only-trusted"},
 	{PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,	"only-download"},
+	{PK_TRANSACTION_FLAG_ENUM_PURGE,		"purge"},
 	{PK_TRANSACTION_FLAG_ENUM_ALLOW_REINSTALL,	"allow-reinstall"},
 	{PK_TRANSACTION_FLAG_ENUM_JUST_REINSTALL,	"just-reinstall"},
 	{PK_TRANSACTION_FLAG_ENUM_ALLOW_DOWNGRADE,	"allow-downgrade"},
+	{0, NULL}
+};
+
+static const PkEnumMatch enum_history_flag[] = {
+	{PK_HISTORY_FLAG_ENUM_NONE,			"none"},	/* fall though value */
+	{PK_HISTORY_FLAG_ENUM_SUCCEEDED,		"succeeded"},
+	{PK_HISTORY_FLAG_ENUM_PACKAGE_CHANGES,		"package-changes"},
 	{0, NULL}
 };
 /* clang-format on */
@@ -597,38 +612,6 @@ pk_exit_enum_to_string (PkExitEnum exit_enum)
 }
 
 /**
- * pk_network_enum_from_string:
- * @network: Text describing the enumerated type
- *
- * Converts a text enumerated type to its unsigned integer representation
- *
- * Return value: the enumerated constant value, e.g. PK_SIGTYPE_ENUM_GPG
- *
- * Since: 0.5.0
- **/
-PkNetworkEnum
-pk_network_enum_from_string (const gchar *network)
-{
-	return pk_enum_find_value (enum_network, network);
-}
-
-/**
- * pk_network_enum_to_string:
- * @network: The enumerated type value
- *
- * Converts a enumerated type to its text representation
- *
- * Return value: the enumerated constant value, e.g. "available"
- *
- * Since: 0.5.0
- **/
-const gchar *
-pk_network_enum_to_string (PkNetworkEnum network)
-{
-	return pk_enum_find_string (enum_network, network);
-}
-
-/**
  * pk_status_enum_from_string:
  * @status: Text describing the enumerated type
  *
@@ -821,6 +804,70 @@ pk_update_state_enum_to_string (PkUpdateStateEnum update_state)
 }
 
 /**
+ * pk_issue_kind_enum_from_string:
+ * @issue_kind: Text describing the enumerated type
+ *
+ * Converts a text enumerated type to its unsigned integer representation
+ *
+ * Return value: the enumerated constant value, e.g. %PK_ISSUE_KIND_ENUM_CVE
+ *
+ * Since: 2.0.0
+ **/
+PkIssueKindEnum
+pk_issue_kind_enum_from_string (const gchar *issue_kind)
+{
+	return pk_enum_find_value (enum_issue_kind, issue_kind);
+}
+
+/**
+ * pk_issue_kind_enum_to_string:
+ * @issue_kind: The enumerated type value
+ *
+ * Converts a enumerated type to its text representation
+ *
+ * Return value: the enumerated constant value, e.g. "cve"
+ *
+ * Since: 2.0.0
+ **/
+const gchar *
+pk_issue_kind_enum_to_string (PkIssueKindEnum issue_kind)
+{
+	return pk_enum_find_string (enum_issue_kind, issue_kind);
+}
+
+/**
+ * pk_file_kind_enum_from_string:
+ * @file_kind: Text describing the enumerated type
+ *
+ * Converts a text enumerated type to its unsigned integer representation
+ *
+ * Return value: the enumerated constant value, e.g. PK_FILE_KIND_ENUM_REGULAR
+ *
+ * Since: 2.0.0
+ **/
+PkFileKindEnum
+pk_file_kind_enum_from_string (const gchar *file_kind)
+{
+	return pk_enum_find_value (enum_file_kind, file_kind);
+}
+
+/**
+ * pk_file_kind_enum_to_string:
+ * @file_kind: The enumerated type value
+ *
+ * Converts a enumerated type to its text representation
+ *
+ * Return value: the enumerated constant value, e.g. "dir"
+ *
+ * Since: 2.0.0
+ **/
+const gchar *
+pk_file_kind_enum_to_string (PkFileKindEnum file_kind)
+{
+	return pk_enum_find_string (enum_file_kind, file_kind);
+}
+
+/**
  * pk_filter_enum_from_string:
  * @filter: Text describing the enumerated type
  *
@@ -946,6 +993,38 @@ const gchar *
 pk_transaction_flag_enum_to_string (PkTransactionFlagEnum transaction_flag)
 {
 	return pk_enum_find_string (enum_transaction_flag, transaction_flag);
+}
+
+/**
+ * pk_history_flag_enum_from_string:
+ * @history_flag: Text describing the enumerated type
+ *
+ * Converts a text enumerated type to its unsigned integer representation
+ *
+ * Return value: the enumerated constant value, e.g. %PK_HISTORY_FLAG_ENUM_SUCCEEDED
+ *
+ * Since: 2.0.0
+ **/
+PkHistoryFlagEnum
+pk_history_flag_enum_from_string (const gchar *history_flag)
+{
+	return pk_enum_find_value (enum_history_flag, history_flag);
+}
+
+/**
+ * pk_history_flag_enum_to_string:
+ * @history_flag: The enumerated type value
+ *
+ * Converts a enumerated type to its text representation
+ *
+ * Return value: the enumerated constant value, e.g. "succeeded"
+ *
+ * Since: 2.0.0
+ **/
+const gchar *
+pk_history_flag_enum_to_string (PkHistoryFlagEnum history_flag)
+{
+	return pk_enum_find_string (enum_history_flag, history_flag);
 }
 
 /**
@@ -1130,7 +1209,7 @@ pk_role_enum_to_localised_present (PkRoleEnum role)
 		/* TRANSLATORS: The role of the transaction, in present tense */
 		text = dgettext ("PackageKit", "Unknown role type");
 		break;
-	case PK_ROLE_ENUM_DEPENDS_ON:
+	case PK_ROLE_ENUM_GET_DEPENDENCIES:
 		/* TRANSLATORS: The role of the transaction, in present tense */
 		text = dgettext ("PackageKit", "Getting dependencies");
 		break;
@@ -1143,9 +1222,9 @@ pk_role_enum_to_localised_present (PkRoleEnum role)
 		/* TRANSLATORS: The role of the transaction, in present tense */
 		text = dgettext ("PackageKit", "Getting details");
 		break;
-	case PK_ROLE_ENUM_REQUIRED_BY:
+	case PK_ROLE_ENUM_GET_DEPENDENTS:
 		/* TRANSLATORS: The role of the transaction, in present tense */
-		text = dgettext ("PackageKit", "Getting requires");
+		text = dgettext ("PackageKit", "Getting dependents");
 		break;
 	case PK_ROLE_ENUM_GET_UPDATES:
 		/* TRANSLATORS: The role of the transaction, in present tense */
@@ -1240,9 +1319,9 @@ pk_role_enum_to_localised_present (PkRoleEnum role)
 		/* TRANSLATORS: The role of the transaction, in present tense */
 		text = dgettext ("PackageKit", "Getting upgrades");
 		break;
-	case PK_ROLE_ENUM_GET_OLD_TRANSACTIONS:
+	case PK_ROLE_ENUM_GET_HISTORY:
 		/* TRANSLATORS: The role of the transaction, in present tense */
-		text = dgettext ("PackageKit", "Getting transactions");
+		text = dgettext ("PackageKit", "Getting transaction history");
 		break;
 	case PK_ROLE_ENUM_UPGRADE_SYSTEM:
 		/* TRANSLATORS: The role of the transaction, in present tense */

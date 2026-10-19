@@ -91,7 +91,7 @@ pk_backend_get_groups (PkBackend *backend)
 PkBitfield
 pk_backend_get_filters (PkBackend *backend)
 {
-	return pk_bitfield_from_enums (PK_FILTER_ENUM_GUI,
+	return pk_bitfield_from_enums (PK_FILTER_ENUM_APPLICATION,
 				       PK_FILTER_ENUM_INSTALLED,
 				       PK_FILTER_ENUM_DEVELOPMENT,
 				       -1);
@@ -138,11 +138,11 @@ pk_backend_cancel (PkBackend *backend, PkBackendJob *job)
 }
 
 static void
-backend_depends_on (PkBackend *backend,
-		    PkBackendJob *job,
-		    PkBitfield filters,
-		    gchar **package_ids,
-		    gboolean recursive)
+backend_get_dependencies (PkBackend *backend,
+			  PkBackendJob *job,
+			  PkBitfield filters,
+			  gchar **package_ids,
+			  gboolean recursive)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -171,8 +171,18 @@ backend_depends_on (PkBackend *backend,
 }
 
 static void
-backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **files)
+backend_get_details_local (PkBackend *backend, PkBackendJob *job)
 {
+	g_autoptr(GError) error = NULL;
+
+	if (pk_backend_job_get_file_path (job, 0, &error) == NULL) {
+		pk_backend_job_error_code (job,
+					   PK_ERROR_ENUM_INVALID_PACKAGE_FILE,
+					   "%s",
+					   error->message);
+		pk_backend_job_finished (job);
+		return;
+	}
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	pk_backend_job_set_percentage (job, 0);
 	pk_backend_job_details (
@@ -191,15 +201,33 @@ backend_get_details_local (PkBackend *backend, PkBackendJob *job, gchar **files)
 }
 
 static void
-backend_get_files_local (PkBackend *backend, PkBackendJob *job, gchar **_files)
+backend_get_files_local (PkBackend *backend, PkBackendJob *job)
 {
-	const gchar *files[] = { "/usr/share/man/man1",
-				 "/usr/share/applications/dave.desktop",
-				 "/etc/yum.repos.d/dave.repo",
-				 NULL };
+	const gchar *path;
+	g_autofree gchar *package_id = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+
+	/* report the staged file as the package data, so tests can see what the backend was given */
+	path = pk_backend_job_get_file_path (job, 0, &error);
+	if (path == NULL) {
+		pk_backend_job_error_code (job,
+					   PK_ERROR_ENUM_INVALID_PACKAGE_FILE,
+					   "%s",
+					   error->message);
+		pk_backend_job_finished (job);
+		return;
+	}
+	package_id = pk_package_id_build ("test", "0.01", "i386", "local", path);
+	g_ptr_array_add (files, pk_file_new ("/usr/share/man/man1", PK_FILE_KIND_ENUM_DIRECTORY));
+	g_ptr_array_add (
+	    files,
+	    pk_file_new ("/usr/share/applications/dave.desktop", PK_FILE_KIND_ENUM_REGULAR));
+	g_ptr_array_add (files,
+			 pk_file_new ("/etc/yum.repos.d/dave.repo", PK_FILE_KIND_ENUM_REGULAR));
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	pk_backend_job_set_percentage (job, 0);
-	pk_backend_job_files (job, "test;0.01;i386;local;", (gchar **) files);
+	pk_backend_job_files (job, package_id, files);
 	pk_backend_job_set_percentage (job, 100);
 	pk_backend_job_finished (job);
 }
@@ -341,6 +369,8 @@ backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 
 	len = g_strv_length (package_ids);
 	for (i = 0; i < len; i++) {
+		g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func (
+		    (GDestroyNotify) pk_file_free);
 		package_id = package_ids[i];
 		if (g_strcmp0 (package_id, "powertop;1.8-1.fc8;i386;fedora;") == 0) {
 			to_strv[0] = "/usr/share/man/man1/boo";
@@ -348,31 +378,35 @@ backend_get_files (PkBackend *backend, PkBackendJob *job, gchar **package_ids)
 			to_strv[2] = NULL;
 		} else if (g_strcmp0 (package_id,
 				      "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed") == 0) {
-			to_strv[0] = "/usr/share/man/man1";
+			to_strv[0] = "/usr/share/man/man1/";
 			to_strv[1] = "/usr/share/man/man1/gnome-power-manager.1.gz";
 			to_strv[2] = "/usr/lib/firefox-3.5.7/firefox";
 			to_strv[3] = NULL;
 		} else if (g_strcmp0 (package_id, "gtkhtml2;2.19.1-4.fc8;i386;fedora;") == 0) {
-			to_strv[0] = "/usr/share/man/man1";
+			to_strv[0] = "/usr/share/man/man1/";
 			to_strv[1] = "/usr/bin/ck-xinit-session";
 			to_strv[2] = "/lib/libselinux.so.1";
 			to_strv[3] = NULL;
 		} else {
-			to_strv[0] = "/usr/share/gnome-power-manager";
+			to_strv[0] = "/usr/share/gnome-power-manager/";
 			to_strv[1] = "/usr/bin/ck-xinit-session";
 			to_strv[2] = NULL;
 		}
-		pk_backend_job_files (job, package_id, (gchar **) to_strv);
+		/* a trailing slash marks the directories */
+		for (guint j = 0; to_strv[j] != NULL; j++)
+			g_ptr_array_add (files,
+					 pk_file_new (to_strv[j], PK_FILE_KIND_ENUM_UNKNOWN));
+		pk_backend_job_files (job, package_id, files);
 	}
 	pk_backend_job_finished (job);
 }
 
 static void
-backend_required_by (PkBackend *backend,
-		     PkBackendJob *job,
-		     PkBitfield filters,
-		     gchar **package_ids,
-		     gboolean recursive)
+backend_get_dependents (PkBackend *backend,
+			PkBackendJob *job,
+			PkBitfield filters,
+			gchar **package_ids,
+			gboolean recursive)
 {
 	g_autoptr(GPtrArray) packages = g_ptr_array_new_with_free_func (g_object_unref);
 
@@ -397,29 +431,23 @@ pk_backend_stage_update_detail (GPtrArray *update_details,
 				const gchar *package_id,
 				gchar **updates,
 				gchar **obsoletes,
-				gchar **vendor_urls,
-				gchar **bugzilla_urls,
-				gchar **cve_urls,
+				GPtrArray *issues,
 				PkRestartEnum restart,
 				const gchar *update_text,
 				const gchar *changelog,
 				PkUpdateStateEnum state,
-				const gchar *issued,
-				const gchar *updated)
+				const gchar *time_issued)
 {
 	g_ptr_array_add (update_details,
 			 pk_update_detail_new_full (package_id,
 						    updates,
 						    obsoletes,
-						    vendor_urls,
-						    bugzilla_urls,
-						    cve_urls,
+						    issues,
 						    restart,
 						    update_text,
 						    changelog,
 						    state,
-						    issued,
-						    updated));
+						    time_issued));
 }
 
 static gboolean
@@ -458,44 +486,62 @@ pk_backend_get_update_detail_timeout (gpointer data)
 	len = g_strv_length (priv->package_ids);
 	for (i = 0; i < len; i++) {
 		const gchar *to_array1[] = { NULL, NULL, NULL };
-		const gchar *to_array2[] = { NULL, NULL, NULL };
-		const gchar *to_array3[] = { NULL, NULL, NULL };
-		const gchar *to_array4[] = { NULL, NULL, NULL };
+		g_autoptr(GPtrArray) issues = g_ptr_array_new_with_free_func (
+		    (GDestroyNotify) pk_issue_free);
 		package_id = priv->package_ids[i];
 		if (g_strcmp0 (package_id, "powertop;1.8-1.fc8;i386;fedora;") == 0) {
 			to_array1[0] = "powertop;1.7-1.fc8;i386;;installed";
-			to_array2[0] = "http://www.distro-update.org/page?moo";
-			to_array3[0] = "http://bgzilla.fd.org/result.php?#12344";
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_ADVISORY,
+						       "http://www.distro-update.org/page?moo",
+						       NULL,
+						       NULL));
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_GENERIC,
+						       "http://bgzilla.fd.org/result.php?#12344",
+						       "12344",
+						       "crash on startup"));
 			pk_backend_stage_update_detail (update_details,
 							package_id,
 							(gchar **) to_array1,
 							NULL,
-							(gchar **) to_array2,
-							(gchar **) to_array3,
-							NULL,
+							issues,
 							PK_RESTART_ENUM_NONE,
 							"Update to newest upstream source",
 							changelog,
 							PK_UPDATE_STATE_ENUM_STABLE,
-							"2009-11-17T09:19:00",
-							"2009-11-19T09:19:00");
+							"2009-11-17T09:19:00");
 		} else if (g_strcmp0 (package_id,
 				      "kernel;2.6.23-0.115.rc3.git1.fc8;i386;;installed") == 0) {
 			to_array1[0] = "kernel;2.6.22-0.104.rc3.git6.fc8;i386;;installed";
 			to_array1[1] = "kernel;2.6.22-0.105.rc3.git7.fc8;i386;;installed";
-			to_array2[0] = "http://www.distro-update.org/page?moo";
-			to_array3[0] = "http://bgzilla.fd.org/result.php?#12344";
-			to_array3[1] = "http://bgzilla.gnome.org/result.php?#9876";
-			to_array4[0] =
-			    "http://nvd.nist.gov/nvd.cfm?cvename=CVE-2007-3381;CVE-2007-3381";
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_ADVISORY,
+						       "http://www.distro-update.org/page?moo",
+						       NULL,
+						       NULL));
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_GENERIC,
+						       "http://bgzilla.fd.org/result.php?#12344",
+						       "12344",
+						       "crash on startup"));
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_GENERIC,
+						       "http://bgzilla.gnome.org/result.php?#9876",
+						       "9876",
+						       NULL));
+			g_ptr_array_add (
+			    issues,
+			    pk_issue_new (PK_ISSUE_KIND_ENUM_CVE,
+					  "http://nvd.nist.gov/nvd.cfm?cvename=CVE-2007-3381",
+					  "CVE-2007-3381",
+					  NULL));
 			pk_backend_stage_update_detail (
 			    update_details,
 			    package_id,
 			    (gchar **) to_array1,
 			    NULL,
-			    (gchar **) to_array2,
-			    (gchar **) to_array3,
-			    (gchar **) to_array4,
+			    issues,
 			    PK_RESTART_ENUM_SYSTEM,
 			    "Update to newest upstream version.\n"
 			    "* This should fix many driver bugs when using nouveau\n"
@@ -503,20 +549,25 @@ pk_backend_get_update_detail_timeout (gpointer data)
 			    "rabbit hardware.",
 			    changelog,
 			    PK_UPDATE_STATE_ENUM_UNSTABLE,
-			    "2008-06-28T09:19:00",
-			    NULL);
+			    "2008-06-28T09:19:00");
 		} else if (g_strcmp0 (package_id, "gtkhtml2;2.19.1-4.fc8;i386;fedora;") == 0) {
 			to_array1[0] = "gtkhtml2;2.18.1-22.fc8;i386;;installed";
-			to_array2[0] = "http://www.distro-update.org/page?moo";
-			to_array3[0] = "http://bgzilla.gnome.org/result.php?#9876";
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_ADVISORY,
+						       "http://www.distro-update.org/page?moo",
+						       NULL,
+						       NULL));
+			g_ptr_array_add (issues,
+					 pk_issue_new (PK_ISSUE_KIND_ENUM_GENERIC,
+						       "http://bgzilla.gnome.org/result.php?#9876",
+						       "9876",
+						       NULL));
 			pk_backend_stage_update_detail (
 			    update_details,
 			    package_id,
 			    (gchar **) to_array1,
 			    NULL,
-			    (gchar **) to_array2,
-			    (gchar **) to_array3,
-			    NULL,
+			    issues,
 			    PK_RESTART_ENUM_SESSION,
 			    "Update to latest *whizz* **bang** version\n"
 			    "* support this new thing\n"
@@ -524,8 +575,7 @@ pk_backend_get_update_detail_timeout (gpointer data)
 			    "- and that new thing",
 			    changelog,
 			    PK_UPDATE_STATE_ENUM_UNKNOWN,
-			    "2008-07-25T09:19:00",
-			    NULL);
+			    "2008-07-25T09:19:00");
 
 		} else if (g_strcmp0 (package_id, "vino;2.24.2.fc9;i386;fedora;") == 0) {
 			to_array1[0] = "vino;2.24.1.fc9;i386;fedora;";
@@ -534,15 +584,12 @@ pk_backend_get_update_detail_timeout (gpointer data)
 			    package_id,
 			    (gchar **) to_array1,
 			    NULL,
-			    NULL,
-			    NULL,
-			    NULL,
+			    issues,
 			    PK_RESTART_ENUM_NONE,
 			    "Cannot get update as update conflics with vncviewer",
 			    changelog,
 			    PK_UPDATE_STATE_ENUM_UNKNOWN,
-			    "2008-07-25",
-			    NULL);
+			    "2008-07-25");
 		} else {
 			/* signal to UI */
 			pk_backend_job_error_code (job,
@@ -619,14 +666,6 @@ backend_get_updates (PkBackend *backend, PkBackendJob *job, PkBitfield filters)
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_QUERY);
 	pk_backend_job_set_percentage (job, PK_BACKEND_PERCENTAGE_INVALID);
-	/* check network state */
-	if (!pk_backend_is_online (backend)) {
-		pk_backend_job_error_code (job,
-					   PK_ERROR_ENUM_NO_NETWORK,
-					   "Cannot check when offline");
-		pk_backend_job_finished (job);
-		return;
-	}
 	job_data->signal_timeout = g_timeout_add (1000, pk_backend_get_updates_timeout, job);
 }
 
@@ -859,12 +898,19 @@ pk_backend_install_files_timeout (gpointer data)
 }
 
 static void
-backend_install_files (PkBackend *backend,
-		       PkBackendJob *job,
-		       PkBitfield transaction_flags,
-		       gchar **full_paths)
+backend_install_files (PkBackend *backend, PkBackendJob *job, PkBitfield transaction_flags)
 {
 	PkBackendDummyJobData *job_data = pk_backend_job_get_user_data (job);
+	g_autoptr(GError) error = NULL;
+
+	if (!pk_backend_job_stage_files (job, &error)) {
+		pk_backend_job_error_code (job,
+					   PK_ERROR_ENUM_INVALID_PACKAGE_FILE,
+					   "%s",
+					   error->message);
+		pk_backend_job_finished (job);
+		return;
+	}
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_INSTALL);
 	pk_backend_job_set_percentage (job, 101);
 	job_data->signal_timeout = g_timeout_add (2000, pk_backend_install_files_timeout, job);
@@ -1758,7 +1804,7 @@ backend_download_packages (PkBackend *backend,
 			   const gchar *directory)
 {
 	gchar *filename;
-	gchar *to_strv[] = { NULL, NULL };
+	g_autoptr(GPtrArray) files = NULL;
 
 	pk_backend_job_set_status (job, PK_STATUS_ENUM_DOWNLOAD);
 
@@ -1768,8 +1814,9 @@ backend_download_packages (PkBackend *backend,
 	pk_backend_job_package_status (job,
 				       "powertop;1.8-1.fc8;i386;fedora;",
 				       PK_INFO_ENUM_DOWNLOADING);
-	to_strv[0] = filename;
-	pk_backend_job_files (job, "powertop;1.8-1.fc8;i386;fedora;", to_strv);
+	files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+	g_ptr_array_add (files, pk_file_new (filename, PK_FILE_KIND_ENUM_REGULAR));
+	pk_backend_job_files (job, "powertop;1.8-1.fc8;i386;fedora;", files);
 	g_free (filename);
 
 	/* second package */
@@ -1778,8 +1825,10 @@ backend_download_packages (PkBackend *backend,
 	pk_backend_job_package_status (job,
 				       "powertop-common;1.8-1.fc8;i386;fedora;",
 				       PK_INFO_ENUM_DOWNLOADING);
-	to_strv[0] = filename;
-	pk_backend_job_files (job, "powertop-common;1.8-1.fc8;i386;fedora;", to_strv);
+	g_clear_pointer (&files, g_ptr_array_unref);
+	files = g_ptr_array_new_with_free_func ((GDestroyNotify) pk_file_free);
+	g_ptr_array_add (files, pk_file_new (filename, PK_FILE_KIND_ENUM_REGULAR));
+	pk_backend_job_files (job, "powertop-common;1.8-1.fc8;i386;fedora;", files);
 	g_free (filename);
 
 	pk_backend_job_finished (job);
@@ -1882,29 +1931,21 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
 	PkRoleEnum role = pk_backend_job_get_role (job);
 
 	switch (role) {
-	case PK_ROLE_ENUM_DEPENDS_ON: {
+	case PK_ROLE_ENUM_GET_DEPENDENCIES: {
 		PkBitfield filters;
 		g_autofree gchar **package_ids = NULL;
 		gboolean recursive;
 
 		g_variant_get (params, "(t^a&sb)", &filters, &package_ids, &recursive);
-		backend_depends_on (backend, job, filters, package_ids, recursive);
+		backend_get_dependencies (backend, job, filters, package_ids, recursive);
 		break;
 	}
-	case PK_ROLE_ENUM_GET_DETAILS_LOCAL: {
-		g_autofree gchar **files = NULL;
-
-		g_variant_get (params, "(^a&s)", &files);
-		backend_get_details_local (backend, job, files);
+	case PK_ROLE_ENUM_GET_DETAILS_LOCAL:
+		backend_get_details_local (backend, job);
 		break;
-	}
-	case PK_ROLE_ENUM_GET_FILES_LOCAL: {
-		g_autofree gchar **files = NULL;
-
-		g_variant_get (params, "(^a&s)", &files);
-		backend_get_files_local (backend, job, files);
+	case PK_ROLE_ENUM_GET_FILES_LOCAL:
+		backend_get_files_local (backend, job);
 		break;
-	}
 	case PK_ROLE_ENUM_GET_DETAILS: {
 		g_autofree gchar **package_ids = NULL;
 
@@ -1922,13 +1963,13 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
 		backend_get_files (backend, job, package_ids);
 		break;
 	}
-	case PK_ROLE_ENUM_REQUIRED_BY: {
+	case PK_ROLE_ENUM_GET_DEPENDENTS: {
 		PkBitfield filters;
 		g_autofree gchar **package_ids = NULL;
 		gboolean recursive;
 
 		g_variant_get (params, "(t^a&sb)", &filters, &package_ids, &recursive);
-		backend_required_by (backend, job, filters, package_ids, recursive);
+		backend_get_dependents (backend, job, filters, package_ids, recursive);
 		break;
 	}
 	case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
@@ -1961,10 +2002,8 @@ pk_backend_run_job (PkBackend *backend, PkBackendJob *job)
 	}
 	case PK_ROLE_ENUM_INSTALL_FILES: {
 		PkBitfield transaction_flags;
-		g_autofree gchar **full_paths = NULL;
-
-		g_variant_get (params, "(t^a&s)", &transaction_flags, &full_paths);
-		backend_install_files (backend, job, transaction_flags, full_paths);
+		g_variant_get (params, "(t*)", &transaction_flags, NULL);
+		backend_install_files (backend, job, transaction_flags);
 		break;
 	}
 	case PK_ROLE_ENUM_REFRESH_CACHE: {
@@ -2121,13 +2160,13 @@ PkBitfield
 pk_backend_get_roles (PkBackend *backend)
 {
 	return pk_bitfield_from_enums (PK_ROLE_ENUM_CANCEL,
-				       PK_ROLE_ENUM_DEPENDS_ON,
+				       PK_ROLE_ENUM_GET_DEPENDENCIES,
 				       PK_ROLE_ENUM_GET_DETAILS_LOCAL,
 				       PK_ROLE_ENUM_GET_FILES_LOCAL,
 				       PK_ROLE_ENUM_GET_DETAILS,
 				       PK_ROLE_ENUM_GET_DISTRO_UPGRADES,
 				       PK_ROLE_ENUM_GET_FILES,
-				       PK_ROLE_ENUM_REQUIRED_BY,
+				       PK_ROLE_ENUM_GET_DEPENDENTS,
 				       PK_ROLE_ENUM_GET_UPDATE_DETAIL,
 				       PK_ROLE_ENUM_GET_UPDATES,
 				       PK_ROLE_ENUM_INSTALL_PACKAGES,
@@ -2187,6 +2226,12 @@ pk_backend_stop_job (PkBackend *backend, PkBackendJob *job)
 
 gboolean
 pk_backend_supports_parallelization (PkBackend *backend)
+{
+	return TRUE;
+}
+
+gboolean
+pk_backend_supports_frontend_socket (PkBackend *backend)
 {
 	return TRUE;
 }

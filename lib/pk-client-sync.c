@@ -57,7 +57,7 @@ pk_client_generic_finish_sync (PkClient *client, GAsyncResult *res, PkClientHelp
 /**
  * pk_client_resolve:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @packages: (array zero-terminated=1): an array of package names to resolve, e.g. "gnome-system-tools"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
@@ -124,7 +124,7 @@ pk_client_resolve (PkClient *client,
 /**
  * pk_client_search_names:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): free text to search for, for instance, "power"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
@@ -190,7 +190,7 @@ pk_client_search_names (PkClient *client,
 /**
  * pk_client_search_details:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): free text to search for, for instance, "power"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
@@ -257,7 +257,7 @@ pk_client_search_details (PkClient *client,
 /**
  * pk_client_search_groups:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): a group enum to search for, for instance, "system-tools"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
@@ -322,7 +322,7 @@ pk_client_search_groups (PkClient *client,
 /**
  * pk_client_search_files:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): file to search for, for instance, "/sbin/service"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
@@ -764,30 +764,34 @@ pk_client_get_updates (PkClient *client,
 }
 
 /**
- * pk_client_get_old_transactions:
+ * pk_client_get_history:
  * @client: a valid #PkClient instance
- * @number: the number of past transactions to return, or 0 for all
+ * @flags: a #PkBitfield of #PkHistoryFlagEnum values, e.g. %PK_HISTORY_FLAG_ENUM_SUCCEEDED
+ * @count: the maximum number of history items to return, or 0 for all
+ * @names: (array zero-terminated=1) (nullable): only return packages with these names, or %NULL for all
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
  * @progress_user_data: data to pass to @progress_callback
  * @error: the #GError to store any failure, or %NULL
  *
- * Get the old transaction list, mainly used for the transaction viewer.
+ * Get the transaction history, newest first.
  *
  * Warning: this function is synchronous, and may block. Do not use it in GUI
  * applications.
  *
  * Return value: (transfer full): a #PkResults object, or %NULL for error
  *
- * Since: 0.5.3
+ * Since: 2.0.0
  **/
 PkResults *
-pk_client_get_old_transactions (PkClient *client,
-				guint number,
-				GCancellable *cancellable,
-				PkProgressCallback progress_callback,
-				gpointer progress_user_data,
-				GError **error)
+pk_client_get_history (PkClient *client,
+		       PkBitfield flags,
+		       guint count,
+		       gchar **names,
+		       GCancellable *cancellable,
+		       PkProgressCallback progress_callback,
+		       gpointer progress_user_data,
+		       GError **error)
 {
 	PkClientHelper helper;
 	PkResults *results;
@@ -804,13 +808,15 @@ pk_client_get_old_transactions (PkClient *client,
 	g_main_context_push_thread_default (helper.context);
 
 	/* run async method */
-	pk_client_get_old_transactions_async (client,
-					      number,
-					      cancellable,
-					      progress_callback,
-					      progress_user_data,
-					      (GAsyncReadyCallback) pk_client_generic_finish_sync,
-					      &helper);
+	pk_client_get_history_async (client,
+				     flags,
+				     count,
+				     names,
+				     cancellable,
+				     progress_callback,
+				     progress_user_data,
+				     (GAsyncReadyCallback) pk_client_generic_finish_sync,
+				     &helper);
 
 	g_main_loop_run (helper.loop);
 
@@ -826,9 +832,9 @@ pk_client_get_old_transactions (PkClient *client,
 }
 
 /**
- * pk_client_depends_on:
+ * pk_client_get_dependencies:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @package_ids: (array zero-terminated=1): a null terminated array of package_id structures such as "hal;0.0.1;i386;fedora;"
  * @recursive: If we should search recursively for depends
  * @cancellable: a #GCancellable or %NULL
@@ -846,14 +852,14 @@ pk_client_get_old_transactions (PkClient *client,
  * Since: 0.5.3
  **/
 PkResults *
-pk_client_depends_on (PkClient *client,
-		      PkBitfield filters,
-		      gchar **package_ids,
-		      gboolean recursive,
-		      GCancellable *cancellable,
-		      PkProgressCallback progress_callback,
-		      gpointer progress_user_data,
-		      GError **error)
+pk_client_get_dependencies (PkClient *client,
+			    PkBitfield filters,
+			    gchar **package_ids,
+			    gboolean recursive,
+			    GCancellable *cancellable,
+			    PkProgressCallback progress_callback,
+			    gpointer progress_user_data,
+			    GError **error)
 {
 	PkClientHelper helper;
 	PkResults *results;
@@ -870,15 +876,15 @@ pk_client_depends_on (PkClient *client,
 	g_main_context_push_thread_default (helper.context);
 
 	/* run async method */
-	pk_client_depends_on_async (client,
-				    filters,
-				    package_ids,
-				    recursive,
-				    cancellable,
-				    progress_callback,
-				    progress_user_data,
-				    (GAsyncReadyCallback) pk_client_generic_finish_sync,
-				    &helper);
+	pk_client_get_dependencies_async (client,
+					  filters,
+					  package_ids,
+					  recursive,
+					  cancellable,
+					  progress_callback,
+					  progress_user_data,
+					  (GAsyncReadyCallback) pk_client_generic_finish_sync,
+					  &helper);
 
 	g_main_loop_run (helper.loop);
 
@@ -896,7 +902,7 @@ pk_client_depends_on (PkClient *client,
 /**
  * pk_client_get_packages:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes
  * @progress_user_data: data to pass to @progress_callback
@@ -956,9 +962,9 @@ pk_client_get_packages (PkClient *client,
 }
 
 /**
- * pk_client_required_by:
+ * pk_client_get_dependents:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @package_ids: (array zero-terminated=1): a null terminated array of package_id structures such as "hal;0.0.1;i386;fedora;"
  * @recursive: If we should search recursively for requires
  * @cancellable: a #GCancellable or %NULL
@@ -976,14 +982,14 @@ pk_client_get_packages (PkClient *client,
  * Since: 0.5.3
  **/
 PkResults *
-pk_client_required_by (PkClient *client,
-		       PkBitfield filters,
-		       gchar **package_ids,
-		       gboolean recursive,
-		       GCancellable *cancellable,
-		       PkProgressCallback progress_callback,
-		       gpointer progress_user_data,
-		       GError **error)
+pk_client_get_dependents (PkClient *client,
+			  PkBitfield filters,
+			  gchar **package_ids,
+			  gboolean recursive,
+			  GCancellable *cancellable,
+			  PkProgressCallback progress_callback,
+			  gpointer progress_user_data,
+			  GError **error)
 {
 	PkClientHelper helper;
 	PkResults *results;
@@ -1000,15 +1006,15 @@ pk_client_required_by (PkClient *client,
 	g_main_context_push_thread_default (helper.context);
 
 	/* run async method */
-	pk_client_required_by_async (client,
-				     filters,
-				     package_ids,
-				     recursive,
-				     cancellable,
-				     progress_callback,
-				     progress_user_data,
-				     (GAsyncReadyCallback) pk_client_generic_finish_sync,
-				     &helper);
+	pk_client_get_dependents_async (client,
+					filters,
+					package_ids,
+					recursive,
+					cancellable,
+					progress_callback,
+					progress_user_data,
+					(GAsyncReadyCallback) pk_client_generic_finish_sync,
+					&helper);
 
 	g_main_loop_run (helper.loop);
 
@@ -1026,7 +1032,7 @@ pk_client_required_by (PkClient *client,
 /**
  * pk_client_what_provides:
  * @client: a valid #PkClient instance
- * @filters: a #PkBitfield such as %PK_FILTER_ENUM_GUI | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
+ * @filters: a #PkBitfield such as %PK_FILTER_ENUM_INSTALLED | %PK_FILTER_ENUM_FREE or %PK_FILTER_ENUM_NONE
  * @values: (array zero-terminated=1): a search term such as "sound/mp3"
  * @cancellable: a #GCancellable or %NULL
  * @progress_callback: (scope call): the function to run when the progress changes

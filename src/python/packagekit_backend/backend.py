@@ -8,9 +8,15 @@ import os
 import signal
 import sys
 import traceback
+from collections import namedtuple
+from collections.abc import Mapping
 from types import SimpleNamespace
 
 from . import enums
+
+#: One issue reference of an update, see :meth:`Backend.update_detail`.
+#: ``kind`` is an ``ISSUE_KIND_*`` constant, ``id`` and ``title`` are optional.
+Issue = namedtuple('Issue', ('kind', 'url', 'id', 'title'), defaults=(None, None))
 from .protocol import Connection, ProtocolError
 
 PROTOCOL_VERSION = 1
@@ -27,8 +33,8 @@ ROLE_ARGS = {
     'get-packages': ('filters',),
     'get-updates': ('filters',),
     'get-repo-list': ('filters',),
-    'depends-on': ('filters', 'package_ids', 'recursive'),
-    'required-by': ('filters', 'package_ids', 'recursive'),
+    'get-dependencies': ('filters', 'package_ids', 'recursive'),
+    'get-dependents': ('filters', 'package_ids', 'recursive'),
     'get-details': ('package_ids',),
     'get-files': ('package_ids',),
     'get-update-detail': ('package_ids',),
@@ -52,12 +58,9 @@ ROLE_ARGS = {
 _CTX_DEFAULTS = {
     'locale': None,
     'uid': 0,
-    'network': False,
     'background': False,
     'interactive': False,
     'cache_age': None,
-    'details_with_deps_size': False,
-    'frontend_socket': None,
     'proxy': {},
     'accepted_eulas': [],
 }
@@ -325,38 +328,43 @@ class Backend:
         package_id,
         updates=(),
         obsoletes=(),
-        vendor_urls=(),
-        bugzilla_urls=(),
-        cve_urls=(),
+        issues=(),
         restart=enums.RESTART_NONE,
         update_text=None,
         changelog=None,
         state=enums.UPDATE_STATE_UNKNOWN,
-        issued=None,
-        updated=None,
+        time_issued=None,
     ):
-        """Queue update details; issued and updated are ISO 8601 timestamps."""
+        """Queue update details.
+
+        issues is a sequence of :class:`Issue`; time_issued is an ISO 8601
+        timestamp.
+        """
         self._queue(
             'update-details',
             {
                 'package_id': package_id,
                 'updates': list(updates),
                 'obsoletes': list(obsoletes),
-                'vendor_urls': list(vendor_urls),
-                'bugzilla_urls': list(bugzilla_urls),
-                'cve_urls': list(cve_urls),
+                'issues': [issue._asdict() for issue in issues],
                 'restart': restart,
                 'update_text': update_text,
                 'changelog': changelog,
                 'state': state,
-                'issued': issued,
-                'updated': updated,
+                'time_issued': time_issued,
             },
         )
 
     def files(self, package_id, files):
-        """Report the files of a package, or of a download when package_id is None."""
-        self._emit('files', package_id=package_id, files=list(files))
+        """Report the files of a package, or of a download when package_id is None.
+
+        files maps each path to a file kind (FILE_KIND_REGULAR, FILE_KIND_DIRECTORY,
+        FILE_KIND_SYMLINK or FILE_KIND_UNKNOWN). A plain iterable of paths reports
+        every entry as unknown; a path ending in "/" is a directory either way.
+        """
+        if not isinstance(files, Mapping):
+            files = dict.fromkeys(files, enums.FILE_KIND_UNKNOWN)
+        self._emit('files', package_id=package_id, files=dict(files))
 
     def repo_detail(self, repo_id, description, enabled):
         self._queue(

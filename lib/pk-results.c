@@ -34,6 +34,7 @@
 #include <glib-object.h>
 
 #include "pk-results.h"
+#include "pk-package-sack.h"
 #include "pk-enum.h"
 #include "pk-enum-types.h"
 
@@ -56,7 +57,7 @@ struct _PkResultsPrivate
 	GPtrArray *update_detail_array;
 	GPtrArray *distro_upgrade_array;
 	GPtrArray *require_restart_array;
-	GPtrArray *transaction_array;
+	GPtrArray *history_array;
 	GPtrArray *files_array;
 	GPtrArray *repo_signature_required_array;
 	GPtrArray *eula_required_array;
@@ -191,7 +192,9 @@ pk_results_set_exit_code (PkResults *results, PkExitEnum exit_enum)
  * @results: a valid #PkResults instance
  * @item: the object to add to the array
  *
- * Adds a package to the results set.
+ * Adds a package to the results set. If a package with the same ID is
+ * already part of the results, it is replaced, so the results only hold
+ * the latest state of each package.
  *
  * Return value: %TRUE if the value was set
  *
@@ -205,7 +208,7 @@ pk_results_add_package (PkResults *results, PkPackage *item)
 	g_return_val_if_fail (PK_IS_RESULTS (results), FALSE);
 	g_return_val_if_fail (item != NULL, FALSE);
 
-	pk_package_sack_add_package (priv->package_sack, item);
+	pk_package_sack_replace_package (priv->package_sack, item);
 	return TRUE;
 }
 
@@ -310,18 +313,18 @@ pk_results_add_require_restart (PkResults *results, PkRequireRestart *item)
 }
 
 /**
- * pk_results_add_transaction:
+ * pk_results_add_history_item:
  * @results: a valid #PkResults instance
  * @item: the object to add to the array
  *
- * Adds a transaction item to the results set.
+ * Adds a history item to the results set.
  *
  * Return value: %TRUE if the value was set
  *
- * Since: 0.5.2
+ * Since: 2.0.0
  **/
 gboolean
-pk_results_add_transaction (PkResults *results, PkTransactionPast *item)
+pk_results_add_history_item (PkResults *results, PkHistoryItem *item)
 {
 	PkResultsPrivate *priv = GET_PRIVATE(results);
 
@@ -329,7 +332,7 @@ pk_results_add_transaction (PkResults *results, PkTransactionPast *item)
 	g_return_val_if_fail (item != NULL, FALSE);
 
 	/* copy and add to array */
-	g_ptr_array_add (priv->transaction_array, g_object_ref (item));
+	g_ptr_array_add (priv->history_array, g_object_ref (item));
 
 	return TRUE;
 }
@@ -680,7 +683,8 @@ pk_results_get_require_restart_array (PkResults *results)
  * RequireRestart(session) then pk_client_get_require_restart will return
  * system as a session restart is implied with a system restart.
  *
- * Return value: a #PkRestartEnum value, e.g. PK_RESTART_ENUM_SYSTEM
+ * Return value: a #PkRestartEnum value, e.g. %PK_RESTART_ENUM_SYSTEM, or
+ *   %PK_RESTART_ENUM_NONE if no restart was requested
  *
  * Since: 0.5.2
  **/
@@ -689,12 +693,12 @@ pk_results_get_require_restart_worst (PkResults *results)
 {
 	PkResultsPrivate *priv = GET_PRIVATE(results);
 	GPtrArray *array;
-	PkRestartEnum worst = 0;
+	PkRestartEnum worst = PK_RESTART_ENUM_NONE;
 	PkRestartEnum restart;
 	guint i;
 	PkRequireRestart *item;
 
-	g_return_val_if_fail (PK_IS_RESULTS (results), 0);
+	g_return_val_if_fail (PK_IS_RESULTS (results), PK_RESTART_ENUM_NONE);
 
 	array = priv->require_restart_array;
 	for (i = 0; i < array->len; i++) {
@@ -708,23 +712,23 @@ pk_results_get_require_restart_worst (PkResults *results)
 }
 
 /**
- * pk_results_get_transaction_array:
+ * pk_results_get_history_array:
  * @results: a valid #PkResults instance
  *
- * Gets the transactions from the transaction.
+ * Gets the history items from the transaction.
  *
- * Return value: (element-type PkTransactionPast) (transfer container): A #GPtrArray array of #PkTransactionPast's, free with g_ptr_array_unref().
+ * Return value: (element-type PkHistoryItem) (transfer container): A #GPtrArray array of #PkHistoryItem's, free with g_ptr_array_unref().
  *
- * Since: 0.5.2
+ * Since: 2.0.0
  **/
 GPtrArray *
-pk_results_get_transaction_array (PkResults *results)
+pk_results_get_history_array (PkResults *results)
 {
 	PkResultsPrivate *priv = GET_PRIVATE(results);
 
 	g_return_val_if_fail (PK_IS_RESULTS (results), NULL);
 
-	return g_ptr_array_ref (priv->transaction_array);
+	return g_ptr_array_ref (priv->history_array);
 }
 
 /**
@@ -896,7 +900,7 @@ pk_results_init (PkResults *results)
 	    (GDestroyNotify) g_object_unref);
 	priv->require_restart_array = g_ptr_array_new_with_free_func (
 	    (GDestroyNotify) g_object_unref);
-	priv->transaction_array = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
+	priv->history_array = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	priv->files_array = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	priv->repo_signature_required_array = g_ptr_array_new_with_free_func (
 	    (GDestroyNotify) g_object_unref);
@@ -918,7 +922,7 @@ pk_results_finalize (GObject *object)
 	g_clear_pointer (&priv->update_detail_array, g_ptr_array_unref);
 	g_clear_pointer (&priv->distro_upgrade_array, g_ptr_array_unref);
 	g_clear_pointer (&priv->require_restart_array, g_ptr_array_unref);
-	g_clear_pointer (&priv->transaction_array, g_ptr_array_unref);
+	g_clear_pointer (&priv->history_array, g_ptr_array_unref);
 	g_clear_pointer (&priv->files_array, g_ptr_array_unref);
 	g_clear_pointer (&priv->repo_signature_required_array, g_ptr_array_unref);
 	g_clear_pointer (&priv->eula_required_array, g_ptr_array_unref);

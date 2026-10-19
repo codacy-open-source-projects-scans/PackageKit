@@ -17,10 +17,17 @@
  */
 
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <apt-pkg/configuration.h>
+#include <apt-pkg/init.h>
+#include <apt-pkg/pkgsystem.h>
+#include <apt-pkg/strutl.h>
 
+#include "apt-cache-file.h"
+#include "apt-job.h"
 #include "deb822.h"
+#include "deb-file.h"
 #include "apt-sourceslist.h"
 #include "apt-utils.h"
 #include "gst-matcher.h"
@@ -504,6 +511,300 @@ static void apt_test_changelog_date(void)
     }
 }
 
+/**
+ * A throwaway APT root directory, seeded from a fixture directory in testdata,
+ * so an AptJob can open a package cache without root privileges or network.
+ * The fixture contains a dpkg "status" file and a flat "Packages" index.
+ */
+class AptTestRoot
+{
+public:
+    explicit AptTestRoot(const std::string &fixtureName)
+    {
+        g_autoptr(GError) error = nullptr;
+        g_autofree gchar *tmp = g_dir_make_tmp("pk-apt-test-XXXXXX", &error);
+        g_assert_no_error(error);
+        root = tmp;
+
+        const fs::path fixture = fs::path(testdata_dir) / fixtureName;
+        for (const char *dir :
+             {"var/lib/dpkg",
+              "var/lib/apt/lists/partial",
+              "var/cache/apt/archives/partial",
+              "etc/apt/preferences.d",
+              "etc/apt/sources.list.d",
+              "repo"})
+            fs::create_directories(root / dir);
+
+        fs::copy_file(fixture / "status", root / "var/lib/dpkg/status");
+        std::ofstream(root / "var/lib/dpkg/available").close();
+        fs::copy_file(fixture / "Packages", root / "repo/Packages");
+
+        // what "apt update" would have fetched for this source
+        const std::string repoUri = "file:" + (root / "repo").string();
+        std::ofstream(root / "etc/apt/sources.list") << "deb [trusted=yes] " << repoUri << " ./\n";
+        fs::copy_file(fixture / "Packages", root / "var/lib/apt/lists" / URItoFileName(repoUri + "/./Packages"));
+
+        static bool configInitialized = false;
+        if (!configInitialized) {
+            g_assert_true(pkgInitConfig(*_config));
+            configInitialized = true;
+        }
+        _config->Set("Dir", root.string() + "/");
+        _config->Set("Dir::State::status", (root / "var/lib/dpkg/status").string());
+        _config->Set("Debug::NoLocking", true);
+        _config->Set("APT::Architecture", "amd64");
+        _config->Clear("APT::Architectures");
+        _config->Set("APT::Architectures::", "amd64");
+        g_assert_true(pkgInitSystem(*_config, _system));
+    }
+
+    ~AptTestRoot()
+    {
+        fs::remove_all(root);
+    }
+
+    fs::path root;
+};
+
+static std::string test_package_id(AptJob &job, const PkgInfo &pi)
+{
+    g_autofree gchar *pkid = job.aptCacheFile()->buildPackageId(pi.ver);
+    return pkid;
+}
+
+static const PkgInfo *test_find_pkg(const PkgList &list, const char *name)
+{
+    for (const auto &pi : list) {
+        if (g_strcmp0(pi.ver.ParentPkg().Name(), name) == 0)
+            return &pi;
+    }
+    return nullptr;
+}
+
+static void apt_test_updates_new_dependency(void)
+{
+    AptTestRoot testRoot("cache-auto-deps");
+
+    AptJob job(nullptr);
+    g_assert_true(job.init());
+
+    // foo 1.0 -> 2.0 pulls in foo-firmware as a new dependency
+    auto plan = job.computeUpdatePlan();
+    g_assert_true(plan.has_value());
+
+    g_assert_cmpuint(plan->updates.size(), ==, 1);
+    g_assert_cmpuint(plan->installs.size(), ==, 1);
+    g_assert_cmpuint(
+        plan->removals.size() + plan->obsoleted.size() + plan->downgrades.size() + plan->blocked.size(),
+        ==,
+        0);
+    g_assert_nonnull(test_find_pkg(plan->updates, "foo"));
+    g_assert_nonnull(test_find_pkg(plan->installs, "foo-firmware"));
+    g_assert_cmpstr(plan->updates[0].ver.VerStr(), ==, "2.0");
+    // the new dependency is pulled in automatically, not requested by the user
+    g_assert_true(plan->installs[0].mode == InstallMode::Auto);
+    g_assert_true(plan->updates[0].mode == InstallMode::Keep);
+
+    // computing the plan must leave no marks behind in the cache
+    for (pkgCache::PkgIterator pkg = (*job.aptCacheFile())->PkgBegin(); !pkg.end(); ++pkg)
+        g_assert_true((*job.aptCacheFile())[pkg].Keep());
+
+    // the package-IDs we emit for GetUpdates must resolve back to the same plan
+    const std::string fooId = test_package_id(job, plan->updates[0]);
+    const std::string firmwareId = test_package_id(job, plan->installs[0]);
+    g_auto(GStrv) ids = g_new0(gchar *, 3);
+    ids[0] = g_strdup(fooId.c_str());
+    ids[1] = g_strdup(firmwareId.c_str());
+
+    PkgList rUpdates, rDowngrades, rInstalls, rRemovals, rObsoleted;
+    g_assert_true(job.resolvePackageUpdateIds(ids, rUpdates, rDowngrades, rInstalls, rRemovals, rObsoleted));
+    g_assert_cmpuint(rUpdates.size(), ==, 1);
+    g_assert_cmpuint(rInstalls.size(), ==, 1);
+    const std::string rFooId = test_package_id(job, rUpdates[0]);
+    const std::string rFirmwareId = test_package_id(job, rInstalls[0]);
+    g_assert_cmpstr(rFooId.c_str(), ==, fooId.c_str());
+    g_assert_cmpstr(rFirmwareId.c_str(), ==, firmwareId.c_str());
+    g_assert_true(rInstalls[0].mode == InstallMode::Auto);
+
+    // an unknown ID is an error, not silently ignored
+    g_auto(GStrv) badIds = g_new0(gchar *, 2);
+    badIds[0] = g_strdup("nonexistent;1.0;amd64;");
+    PkgList unused;
+    g_assert_false(job.resolvePackageUpdateIds(badIds, unused, unused, unused, unused, unused));
+}
+
+static bool test_pkg_marked_auto(AptJob &job, const char *name)
+{
+    AptCacheFile *cache = job.aptCacheFile();
+    const pkgCache::PkgIterator pkg = (*cache)->FindPkg(name);
+    g_assert_false(pkg.end());
+    g_assert_true((*cache)[pkg].NewInstall());
+    return (*cache)[pkg].Flags & pkgCache::Flag::Auto;
+}
+
+/* issue #1025: a dependency pulled in by UpdatePackages must end up automatically installed */
+static void apt_test_update_marks_new_dependency_auto(void)
+{
+    AptTestRoot testRoot("cache-auto-deps");
+    AptJob job(nullptr);
+    g_assert_true(job.init());
+
+    // what the daemon does for UpdatePackages with the IDs from GetUpdates
+    auto plan = job.computeUpdatePlan();
+    g_assert_true(plan.has_value());
+    g_auto(GStrv) ids = g_new0(gchar *, 3);
+    ids[0] = job.aptCacheFile()->buildPackageId(plan->updates[0].ver);
+    ids[1] = job.aptCacheFile()->buildPackageId(plan->installs[0].ver);
+
+    TransactionRequest request;
+    PkgList downgradeIgnored;
+    g_assert_true(job.resolvePackageUpdateIds(
+        ids,
+        request.update,
+        downgradeIgnored,
+        request.install,
+        request.remove,
+        request.remove));
+    request.flags = pk_bitfield_from_enums(PK_TRANSACTION_FLAG_ENUM_SIMULATE, -1);
+    g_assert_true(job.runTransaction(request));
+
+    g_assert_true(test_pkg_marked_auto(job, "foo-firmware"));
+}
+
+/* ...whereas the same package explicitly requested via InstallPackages is manual */
+static void apt_test_install_marks_package_manual(void)
+{
+    AptTestRoot testRoot("cache-auto-deps");
+    AptJob job(nullptr);
+    g_assert_true(job.init());
+
+    const pkgCache::PkgIterator pkg = (*job.aptCacheFile())->FindPkg("foo-firmware");
+    g_assert_false(pkg.end());
+    g_auto(GStrv) ids = g_new0(gchar *, 2);
+    ids[0] = job.aptCacheFile()->buildPackageId(job.aptCacheFile()->findCandidateVer(pkg));
+
+    TransactionRequest request;
+    request.install = job.resolvePackageIds(ids);
+    g_assert_cmpuint(request.install.size(), ==, 1);
+    request.install[0].mode = InstallMode::Manual;
+    request.flags = pk_bitfield_from_enums(PK_TRANSACTION_FLAG_ENUM_SIMULATE, -1);
+    g_assert_true(job.runTransaction(request));
+
+    g_assert_false(test_pkg_marked_auto(job, "foo-firmware"));
+}
+
+static PkgInfo test_resolve_one(AptJob &job, const char *name, PkBitfield filters = PK_FILTER_ENUM_NONE)
+{
+    g_auto(GStrv) ids = g_new0(gchar *, 2);
+    ids[0] = g_strdup(name);
+    const PkgList found = job.resolvePackageIds(ids, filters);
+    g_assert_cmpuint(found.size(), ==, 1);
+    return found[0];
+}
+
+/* a package in dpkg state "rc" (removed, configuration files left) is reported as residual */
+static void apt_test_residual_state(void)
+{
+    AptTestRoot testRoot("cache-auto-deps");
+    AptJob job(nullptr);
+    g_assert_true(job.init());
+
+    const PkgList all = job.getPackages();
+    const PkgInfo *bar = test_find_pkg(all, "bar");
+    g_assert_nonnull(bar);
+    g_assert_cmpint(job.packageStateFromVer(bar->ver), ==, PK_INFO_ENUM_RESIDUAL);
+    g_assert_cmpint(job.packageStateFromVer(test_find_pkg(all, "foo")->ver), ==, PK_INFO_ENUM_INSTALLED);
+
+    // the residual filter selects exactly these packages, the installed filter excludes them
+    g_auto(GStrv) names = g_new0(gchar *, 3);
+    names[0] = g_strdup("bar");
+    names[1] = g_strdup("foo");
+    g_assert_cmpuint(job.resolvePackageIds(names, pk_bitfield_value(PK_FILTER_ENUM_RESIDUAL)).size(), ==, 1);
+    g_assert_cmpuint(job.resolvePackageIds(names, pk_bitfield_value(PK_FILTER_ENUM_INSTALLED)).size(), ==, 1);
+    g_assert_cmpstr(
+        job.resolvePackageIds(names, pk_bitfield_value(PK_FILTER_ENUM_RESIDUAL))[0].ver.ParentPkg().Name(),
+        ==,
+        "bar");
+    // (foo resolves to its installed and its candidate version, bar must not be among them)
+    const PkgList notResidual = job.resolvePackageIds(names, pk_bitfield_value(PK_FILTER_ENUM_NOT_RESIDUAL));
+    g_assert_cmpuint(notResidual.size(), ==, 2);
+    g_assert_null(test_find_pkg(notResidual, "bar"));
+
+    // the package-id we hand out resolves back to the same package
+    const std::string barId = test_package_id(job, *bar);
+    const PkgInfo resolved = test_resolve_one(job, barId.c_str());
+    g_assert_cmpstr(resolved.ver.ParentPkg().Name(), ==, "bar");
+}
+
+static bool test_simulate_remove(AptJob &job, const char *name, PkFilterEnum filter, PkBitfield extraFlags)
+{
+    TransactionRequest request;
+    request.remove.append(test_resolve_one(job, name, pk_bitfield_value(filter)).ver);
+    request.flags = pk_bitfield_value(PK_TRANSACTION_FLAG_ENUM_SIMULATE) | extraFlags;
+    return job.runTransaction(request);
+}
+
+/* the purge flag turns a removal into a purge, without it only the package is removed */
+static void apt_test_purge_remove_flag(void)
+{
+    {
+        AptTestRoot testRoot("cache-auto-deps");
+        AptJob job(nullptr);
+        g_assert_true(job.init());
+        g_assert_true(test_simulate_remove(job, "foo", PK_FILTER_ENUM_INSTALLED, 0));
+        const auto &state = (*job.aptCacheFile())[(*job.aptCacheFile())->FindPkg("foo")];
+        g_assert_true(state.Delete());
+        g_assert_false(state.Purge());
+    }
+    {
+        AptTestRoot testRoot("cache-auto-deps");
+        AptJob job(nullptr);
+        g_assert_true(job.init());
+        g_assert_true(test_simulate_remove(
+            job,
+            "foo",
+            PK_FILTER_ENUM_INSTALLED,
+            pk_bitfield_value(PK_TRANSACTION_FLAG_ENUM_PURGE)));
+        const auto &state = (*job.aptCacheFile())[(*job.aptCacheFile())->FindPkg("foo")];
+        g_assert_true(state.Delete());
+        g_assert_true(state.Purge());
+    }
+}
+
+/* a residual package can only be acted on with the purge flag */
+static void apt_test_purge_residual_package(void)
+{
+    {
+        AptTestRoot testRoot("cache-auto-deps");
+        AptJob job(nullptr);
+        g_assert_true(job.init());
+        g_assert_true(test_simulate_remove(job, "bar", PK_FILTER_ENUM_RESIDUAL, 0));
+        g_assert_true((*job.aptCacheFile())[(*job.aptCacheFile())->FindPkg("bar")].Keep());
+    }
+    {
+        AptTestRoot testRoot("cache-auto-deps");
+        AptJob job(nullptr);
+        g_assert_true(job.init());
+        g_assert_true(test_simulate_remove(
+            job,
+            "bar",
+            PK_FILTER_ENUM_RESIDUAL,
+            pk_bitfield_value(PK_TRANSACTION_FLAG_ENUM_PURGE)));
+        g_assert_true((*job.aptCacheFile())[(*job.aptCacheFile())->FindPkg("bar")].Purge());
+        // nothing else was touched
+        g_assert_true((*job.aptCacheFile())[(*job.aptCacheFile())->FindPkg("foo")].Keep());
+    }
+}
+
+static void apt_test_deb_file_open_error(void)
+{
+    const std::string missing = testdata_dir + "/does-not-exist.deb";
+    const auto deb = DebFile::open(missing);
+    g_assert_false(deb.has_value());
+    g_assert_true(deb.error().find(missing) != std::string::npos);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 0)
@@ -524,10 +825,17 @@ int main(int argc, char **argv)
     g_test_add_func("/apt/gst-matcher/without-caps", apt_test_gst_matcher_without_caps);
     g_test_add_func("/apt/gst-matcher/bad-caps", apt_test_gst_matcher_bad_caps);
     g_test_add_func("/apt/deb822/readwrite", apt_test_deb822);
+    g_test_add_func("/apt/deb-file/open-error", apt_test_deb_file_open_error);
     g_test_add_func("/apt/sources/read", apt_test_sources_read);
     g_test_add_func("/apt/sources/write", apt_test_sources_write);
     g_test_add_func("/apt/sources/source-record-assign", apt_test_source_record_assign);
     g_test_add_func("/apt/utils/changelog-date", apt_test_changelog_date);
+    g_test_add_func("/apt/updates/new-dependency", apt_test_updates_new_dependency);
+    g_test_add_func("/apt/updates/new-dependency-auto", apt_test_update_marks_new_dependency_auto);
+    g_test_add_func("/apt/install/package-manual", apt_test_install_marks_package_manual);
+    g_test_add_func("/apt/residual/state", apt_test_residual_state);
+    g_test_add_func("/apt/purge/remove-flag", apt_test_purge_remove_flag);
+    g_test_add_func("/apt/purge/residual-package", apt_test_purge_residual_package);
 
     return g_test_run();
 }

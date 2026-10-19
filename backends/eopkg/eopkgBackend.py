@@ -182,7 +182,7 @@ class PackageKitEopkgBackend(pkb.Backend):
     name = "eopkg"
     description = "Eopkg - Solus Package Manager"
     author = "Solus Developers <releng@getsol.us>"
-    filters = (pkb.FILTER_GUI, pkb.FILTER_INSTALLED)
+    filters = (pkb.FILTER_APPLICATION, pkb.FILTER_INSTALLED)
     groups = (
         pkb.GROUP_UTILITIES,
         pkb.GROUP_EDUCATION,
@@ -411,9 +411,9 @@ class PackageKitEopkgBackend(pkb.Backend):
 
         for pkg, status, origin, data in candidates:
             if filters is not None:
-                if pkb.FILTER_GUI in filters and "app:gui" not in pkg.isA:
+                if pkb.FILTER_APPLICATION in filters and "app:gui" not in pkg.isA:
                     continue
-                if pkb.FILTER_NOT_GUI in filters and "app:gui" in pkg.isA:
+                if pkb.FILTER_NOT_APPLICATION in filters and "app:gui" in pkg.isA:
                     continue
                 # FIXME: To lower
                 nonfree = ["EULA", "Distributable"]
@@ -439,7 +439,7 @@ class PackageKitEopkgBackend(pkb.Backend):
             pkg_id = pkb.get_package_id(pkg.name, version, pkg.architecture, origin, data)
             self.package(pkg_id, status, pkg.summary)
 
-    def depends_on(self, filters, package_ids, recursive):
+    def get_dependencies(self, filters, package_ids, recursive):
         """Prints a list of depends for a given package"""
         self.status(pkb.STATUS_QUERY)
         self.allow_cancel(True)
@@ -612,7 +612,7 @@ class PackageKitEopkgBackend(pkb.Backend):
                 enabled = True
             self.repo_detail(repo, uri, enabled)
 
-    def required_by(self, filters, package_ids, recursive):
+    def get_dependents(self, filters, package_ids, recursive):
         """Prints a list of requires for a given package"""
         self.status(pkb.STATUS_QUERY)
         self.allow_cancel(True)
@@ -693,7 +693,7 @@ class PackageKitEopkgBackend(pkb.Backend):
 
             update_message = pkg.history[0].comment
 
-            updated_date = pkg.history[0].date
+            issued_date = pkg.history[0].date
 
             changelog = ""  # we do not have an enforced standard for changelogs in commit msgs
 
@@ -705,22 +705,24 @@ class PackageKitEopkgBackend(pkb.Backend):
             reboot = "none"
 
             # TODO: Eopkg doesn't provide any time
-            split_date = updated_date.split("-")
-            updated = "{}-{}-{}T00:00:00Z".format(split_date[0], split_date[1], split_date[2])
-            # Note: updates are always fixed
-            issued = updated
+            split_date = issued_date.split("-")
+            time_issued = "{}-{}-{}T00:00:00Z".format(split_date[0], split_date[1], split_date[2])
+
+            issues = [pkb.Issue(pkb.ISSUE_KIND_ADVISORY, vendor_url)] if vendor_url else []
+            issues += [
+                pkb.Issue(pkb.ISSUE_KIND_CVE, 'https://www.cve.org/CVERecord?id=' + cve, cve)
+                for cve in cvelist
+            ]
 
             self.update_detail(
                 package_id,
                 updates=[updates] if updates else [],
-                vendor_urls=[vendor_url] if vendor_url else [],
-                cve_urls=cvelist,
+                issues=issues,
                 restart=reboot,
                 update_text=update_message,
                 changelog=changelog,
                 state=state,
-                issued=issued,
-                updated=updated,
+                time_issued=time_issued,
             )
 
     @privileged

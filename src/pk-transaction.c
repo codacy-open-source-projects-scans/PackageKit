@@ -39,6 +39,8 @@
 #include <glib/gstdio.h>
 #include <glib/gi18n.h>
 #include <gio/gio.h>
+#include <gio/gunixfdlist.h>
+#include <gio/gunixsocketaddress.h>
 #include <pk-common.h>
 #include <pk-common-private.h>
 #include <pk-enum.h>
@@ -50,6 +52,7 @@
 
 #include "pk-backend.h"
 #include "pk-dbus.h"
+#include "pk-proxy-store.h"
 #include "pk-shared.h"
 #include "pk-transaction-db.h"
 #include "pk-transaction.h"
@@ -57,10 +60,6 @@
 
 static void pk_transaction_finalize (GObject *object);
 static void pk_transaction_dispose (GObject *object);
-
-static gchar *pk_transaction_get_content_type_for_file (const gchar *filename, GError **error);
-static gboolean pk_transaction_is_supported_content_type (PkTransaction *transaction,
-							  const gchar *content_type);
 
 #define PK_TRANSACTION_UPDATES_CHANGED_TIMEOUT 100 /* ms */
 
@@ -126,7 +125,9 @@ struct _PkTransaction
 	gchar *cached_package_id;
 	gchar **cached_package_ids;
 	gchar *cached_transaction_id;
-	gchar **cached_full_paths;
+	GUnixFDList *cached_fds;
+	GSocket *frontend_socket;
+	gchar *frontend_socket_path;
 	PkBitfield cached_filters;
 	gchar **cached_values;
 	gchar *cached_repo_id;
@@ -136,7 +137,6 @@ struct _PkTransaction
 	gchar *cached_directory;
 	gchar *cached_cat_id;
 	PkUpgradeKindEnum cached_upgrade_kind;
-	GPtrArray *supported_content_types;
 	guint registration_id;
 	GDBusConnection *connection;
 	GDBusNodeInfo *introspection;
@@ -597,6 +597,16 @@ pk_transaction_error_code_cb (PkBackendJob *job, PkError *item, PkTransaction *t
 			   pk_role_enum_to_string (transaction->role));
 	}
 
+	/* A fetch that failed while we have no network is likely due to that, so we
+	 * can give a better answer in those cases. We only check the monitor after
+	 * a real failure, so we never block a system in case its answer is wrong. */
+	if ((code == PK_ERROR_ENUM_CANNOT_FETCH_SOURCES ||
+	     code == PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED) &&
+	    !g_network_monitor_get_network_available (g_network_monitor_get_default ())) {
+		code = PK_ERROR_ENUM_NO_NETWORK;
+		g_object_set (item, "code", code, NULL);
+	}
+
 	/* add to results */
 	pk_results_set_error_code (transaction->results, item);
 
@@ -614,23 +624,21 @@ pk_transaction_error_code_cb (PkBackendJob *job, PkError *item, PkTransaction *t
 static void
 pk_transaction_files_cb (PkBackendJob *job, PkFiles *item, PkTransaction *transaction)
 {
-	guint i;
-	g_autofree gchar *package_id = NULL;
-	g_auto(GStrv) files = NULL;
+	const gchar *package_id = pk_files_get_package_id (item);
+	GPtrArray *files = pk_files_get_files (item);
+	GVariantBuilder builder;
 
 	g_return_if_fail (PK_IS_TRANSACTION (transaction));
 	g_return_if_fail (transaction->tid != NULL);
 
-	/* get data */
-	g_object_get (item, "package-id", &package_id, "files", &files, NULL);
-
 	/* ensure the files have the correct prefix */
 	if (transaction->role == PK_ROLE_ENUM_DOWNLOAD_PACKAGES &&
 	    transaction->cached_directory != NULL) {
-		for (i = 0; files[i] != NULL; i++) {
-			if (!g_str_has_prefix (files[i], transaction->cached_directory)) {
+		for (guint i = 0; i < files->len; i++) {
+			const gchar *path = pk_file_get_path (g_ptr_array_index (files, i));
+			if (!g_str_has_prefix (path, transaction->cached_directory)) {
 				g_warning ("%s does not have the correct prefix (%s)",
-					   files[i],
+					   path,
 					   transaction->cached_directory);
 			}
 		}
@@ -641,13 +649,21 @@ pk_transaction_files_cb (PkBackendJob *job, PkFiles *item, PkTransaction *transa
 
 	/* emit */
 	g_debug ("emitting files %s", package_id);
+	g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(su)"));
+	for (guint i = 0; i < files->len; i++) {
+		PkFile *file = g_ptr_array_index (files, i);
+		g_variant_builder_add (&builder,
+				       "(su)",
+				       pk_file_get_path (file),
+				       pk_file_get_kind (file));
+	}
 	g_dbus_connection_emit_signal (
 	    transaction->connection,
 	    NULL,
 	    transaction->tid,
 	    PK_DBUS_INTERFACE_TRANSACTION,
 	    "Files",
-	    g_variant_new ("(s^as)", package_id != NULL ? package_id : "", files),
+	    g_variant_new ("(sa(su))", package_id != NULL ? package_id : "", &builder),
 	    NULL);
 }
 
@@ -861,28 +877,12 @@ pk_transaction_get_uid (PkTransaction *transaction)
 	return transaction->client_uid;
 }
 
-static void
-pk_transaction_setup_mime_types (PkTransaction *transaction)
-{
-	guint i;
-	g_auto(GStrv) mime_types = NULL;
-
-	/* get list of mime types supported by backends */
-	mime_types = pk_backend_get_mime_types (transaction->backend);
-	for (i = 0; mime_types[i] != NULL; i++) {
-		g_ptr_array_add (transaction->supported_content_types, g_strdup (mime_types[i]));
-	}
-}
-
 void
 pk_transaction_set_backend (PkTransaction *transaction, PkBackend *backend)
 {
 	g_return_if_fail (PK_IS_TRANSACTION (transaction));
 
 	g_set_object (&transaction->backend, backend);
-
-	/* setup supported mime types */
-	pk_transaction_setup_mime_types (transaction);
 }
 
 /**
@@ -1198,6 +1198,10 @@ pk_transaction_finished_cb (PkBackendJob *job, PkExitEnum exit_enum, PkTransacti
  * than for packages. */
 #define PK_TRANSACTION_UPDATE_DETAILS_BATCH_SIZE 100
 
+/* Maximum number of past transactions to put into a single History signal
+ * emission; each may carry a long package list. */
+#define PK_HISTORY_BATCH_SIZE 50
+
 static void
 pk_transaction_emit_packages_batch (PkTransaction *transaction, GVariantBuilder *builder)
 {
@@ -1270,7 +1274,7 @@ pk_transaction_packages_cb (PkBackend *backend,
 			}
 		}
 		if (pk_bitfield_contain (transaction->cached_filters, PK_FILTER_ENUM_INSTALLED)) {
-			if (info == PK_INFO_ENUM_AVAILABLE) {
+			if (info == PK_INFO_ENUM_AVAILABLE || info == PK_INFO_ENUM_RESIDUAL) {
 				role_text = pk_role_enum_to_string (transaction->role);
 				g_warning ("%s emitted package that was ~installed when "
 					   "the installed filter is in place",
@@ -1279,7 +1283,7 @@ pk_transaction_packages_cb (PkBackend *backend,
 			}
 		}
 
-		/* add to results even if we already got a result */
+		/* replaces an earlier result for the same package */
 		pk_results_add_package (transaction->results, item);
 
 		/* emit */
@@ -1493,13 +1497,19 @@ pk_transaction_require_restart_cb (PkBackend *backend,
 	/* get data */
 	g_object_get (item, "package-id", &package_id, "restart", &restart, NULL);
 
-	/* filter out duplicates */
+	/* filter out duplicates, unless the restart became more severe */
 	array = pk_results_get_require_restart_array (transaction->results);
 	for (i = 0; i < array->len; i++) {
 		g_autofree gchar *package_id_tmp = NULL;
+		PkRestartEnum restart_tmp;
 		item_tmp = g_ptr_array_index (array, i);
-		g_object_get (item_tmp, "package-id", &package_id_tmp, NULL);
-		if (g_strcmp0 (package_id, package_id_tmp) == 0) {
+		g_object_get (item_tmp,
+			      "package-id",
+			      &package_id_tmp,
+			      "restart",
+			      &restart_tmp,
+			      NULL);
+		if (g_strcmp0 (package_id, package_id_tmp) == 0 && restart_tmp >= restart) {
 			found = TRUE;
 			break;
 		}
@@ -1515,6 +1525,15 @@ pk_transaction_require_restart_cb (PkBackend *backend,
 
 	/* add to results */
 	pk_results_add_require_restart (transaction->results, item);
+
+	/* remember a required system restart until the next boot */
+	if (restart == PK_RESTART_ENUM_SYSTEM &&
+	    !pk_bitfield_contain (transaction->cached_transaction_flags,
+				  PK_TRANSACTION_FLAG_ENUM_SIMULATE)) {
+		g_autoptr(GError) error = NULL;
+		if (!pk_util_reboot_state_add (transaction->conf, package_id, &error))
+			g_warning ("failed to record required restart: %s", error->message);
+	}
 
 	/* emit */
 	g_debug ("emitting require-restart %s, '%s'",
@@ -1562,9 +1581,67 @@ pk_transaction_emit_update_details_batch (PkTransaction *transaction, GVariantBu
 					    transaction->tid,
 					    PK_DBUS_INTERFACE_TRANSACTION,
 					    "UpdateDetails",
-					    g_variant_new ("(a(sasasasasasussuss))", builder),
+					    g_variant_new ("(a(sa{sv}))", builder),
 					    &error))
 		g_warning ("Failed to emit UpdateDetails signal: %s", error->message);
+}
+
+/**
+ * pk_transaction_issues_to_variant:
+ * @issues: (element-type PkIssue): a #GPtrArray of #PkIssue
+ *
+ * Build the `issues` value of an update detail as `aa{sv}`
+ */
+static GVariant *
+pk_transaction_issues_to_variant (GPtrArray *issues)
+{
+	GVariantBuilder builder;
+
+	g_variant_builder_init (&builder, G_VARIANT_TYPE ("aa{sv}"));
+	for (guint i = 0; i < issues->len; i++) {
+		PkIssue *issue = g_ptr_array_index (issues, i);
+		GVariantBuilder dict;
+
+		g_variant_builder_init (&dict, G_VARIANT_TYPE ("a{sv}"));
+		g_variant_builder_add (&dict,
+				       "{sv}",
+				       "kind",
+				       g_variant_new_uint32 (pk_issue_get_kind (issue)));
+		g_variant_builder_add (&dict,
+				       "{sv}",
+				       "url",
+				       g_variant_new_string (pk_issue_get_url (issue)));
+		if (pk_issue_get_id (issue) != NULL)
+			g_variant_builder_add (&dict,
+					       "{sv}",
+					       "id",
+					       g_variant_new_string (pk_issue_get_id (issue)));
+		if (pk_issue_get_title (issue) != NULL)
+			g_variant_builder_add (&dict,
+					       "{sv}",
+					       "title",
+					       g_variant_new_string (pk_issue_get_title (issue)));
+		g_variant_builder_add_value (&builder, g_variant_builder_end (&dict));
+	}
+
+	return g_variant_builder_end (&builder);
+}
+
+static void
+pk_transaction_dict_add_string (GVariantBuilder *dict, const gchar *key, const gchar *value)
+{
+	if (value != NULL && value[0] != '\0')
+		g_variant_builder_add (dict, "{sv}", key, g_variant_new_string (value));
+}
+
+static void
+pk_transaction_dict_add_strv (GVariantBuilder *dict, const gchar *key, gchar **value)
+{
+	if (value != NULL && value[0] != NULL)
+		g_variant_builder_add (dict,
+				       "{sv}",
+				       key,
+				       g_variant_new_strv ((const gchar *const *) value, -1));
 }
 
 static void
@@ -1573,8 +1650,7 @@ pk_transaction_update_details_cb (
     GPtrArray *update_details_array, /* (element-type PkUpdateDetail) */
     PkTransaction *transaction)
 {
-	g_auto(GVariantBuilder)
-		   builder = G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE ("a(sasasasasasussuss)"));
+	g_auto(GVariantBuilder) builder = G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE ("a(sa{sv})"));
 	guint n_in_batch = 0;
 
 	g_return_if_fail (PK_IS_TRANSACTION (transaction));
@@ -1588,54 +1664,58 @@ pk_transaction_update_details_cb (
 	/* Loop through the update details and build the signal emissions. */
 	for (guint i = 0; i < update_details_array->len; i++) {
 		PkUpdateDetail *item = g_ptr_array_index (update_details_array, i);
-		const gchar *changelog;
-		const gchar *issued;
-		const gchar *package_id;
-		const gchar *updated;
-		const gchar *update_text;
-		const gchar *const *bugzilla_urls;
-		const gchar *const *cve_urls;
-		const gchar *const empty[] = { NULL };
-		const gchar *const *obsoletes;
-		const gchar *const *updates;
-		const gchar *const *vendor_urls;
+		GPtrArray *issues;
+		GVariantBuilder dict;
 
 		/* add to results */
 		pk_results_add_update_detail (transaction->results, item);
 
 		/* emit */
-		package_id = pk_update_detail_get_package_id (item);
-		updates = (const gchar *const *) pk_update_detail_get_updates (item);
-		obsoletes = (const gchar *const *) pk_update_detail_get_obsoletes (item);
-		vendor_urls = (const gchar *const *) pk_update_detail_get_vendor_urls (item);
-		bugzilla_urls = (const gchar *const *) pk_update_detail_get_bugzilla_urls (item);
-		cve_urls = (const gchar *const *) pk_update_detail_get_cve_urls (item);
-		update_text = pk_update_detail_get_update_text (item);
-		changelog = pk_update_detail_get_changelog (item);
-		issued = pk_update_detail_get_issued (item);
-		updated = pk_update_detail_get_updated (item);
-		g_debug ("emitting update-detail for %s", package_id);
-
+		g_debug ("emitting update-detail for %s", pk_update_detail_get_package_id (item));
+		g_variant_builder_init (&dict, G_VARIANT_TYPE ("a{sv}"));
+		pk_transaction_dict_add_strv (&dict,
+					      "updates",
+					      pk_update_detail_get_updates (item));
+		pk_transaction_dict_add_strv (&dict,
+					      "obsoletes",
+					      pk_update_detail_get_obsoletes (item));
+		issues = pk_update_detail_get_issues (item);
+		if (issues != NULL && issues->len > 0)
+			g_variant_builder_add (&dict,
+					       "{sv}",
+					       "issues",
+					       pk_transaction_issues_to_variant (issues));
+		if (pk_update_detail_get_restart (item) != PK_RESTART_ENUM_UNKNOWN)
+			g_variant_builder_add (
+			    &dict,
+			    "{sv}",
+			    "restart",
+			    g_variant_new_uint32 (pk_update_detail_get_restart (item)));
+		pk_transaction_dict_add_string (&dict,
+						"update-text",
+						pk_update_detail_get_update_text (item));
+		pk_transaction_dict_add_string (&dict,
+						"changelog",
+						pk_update_detail_get_changelog (item));
+		if (pk_update_detail_get_state (item) != PK_UPDATE_STATE_ENUM_UNKNOWN)
+			g_variant_builder_add (
+			    &dict,
+			    "{sv}",
+			    "state",
+			    g_variant_new_uint32 (pk_update_detail_get_state (item)));
+		pk_transaction_dict_add_string (&dict,
+						"time-issued",
+						pk_update_detail_get_time_issued (item));
 		g_variant_builder_add (&builder,
-				       "(s^as^as^as^as^asussuss)",
-				       package_id,
-				       updates != NULL ? updates : empty,
-				       obsoletes != NULL ? obsoletes : empty,
-				       vendor_urls != NULL ? vendor_urls : empty,
-				       bugzilla_urls != NULL ? bugzilla_urls : empty,
-				       cve_urls != NULL ? cve_urls : empty,
-				       pk_update_detail_get_restart (item),
-				       update_text != NULL ? update_text : "",
-				       changelog != NULL ? changelog : "",
-				       pk_update_detail_get_state (item),
-				       issued != NULL ? issued : "",
-				       updated != NULL ? updated : "");
+				       "(sa{sv})",
+				       pk_update_detail_get_package_id (item),
+				       &dict);
 		n_in_batch++;
 
 		/* emit a full batch and start a new one */
 		if (n_in_batch >= PK_TRANSACTION_UPDATE_DETAILS_BATCH_SIZE) {
 			pk_transaction_emit_update_details_batch (transaction, &builder);
-			g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(sasasasasasussuss)"));
+			g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(sa{sv})"));
 			n_in_batch = 0;
 		}
 	}
@@ -1648,48 +1728,29 @@ pk_transaction_update_details_cb (
 static gboolean
 pk_transaction_set_session_state (PkTransaction *transaction, GError **error)
 {
-	gboolean ret;
-	g_autofree gchar *session = NULL;
-	g_autofree gchar *proxy_http = NULL;
-	g_autofree gchar *proxy_https = NULL;
-	g_autofree gchar *proxy_ftp = NULL;
-	g_autofree gchar *proxy_socks = NULL;
-	g_autofree gchar *no_proxy = NULL;
-	g_autofree gchar *pac = NULL;
 	g_autofree gchar *cmdline = NULL;
+	g_autofree gchar *session = NULL;
+	g_autoptr(PkProxySettings) proxy = NULL;
 
-	/* get session */
+	/* the proxy registered for the caller's session, if any */
 	if (!pk_dbus_connect (transaction->dbus, error))
 		return FALSE;
 	session = pk_dbus_get_session (transaction->dbus, transaction->sender);
-	if (session == NULL) {
-		g_set_error_literal (error, 1, 0, "failed to get the session");
+	if (!pk_proxy_store_load (transaction->conf,
+				  transaction->client_uid,
+				  session,
+				  &proxy,
+				  error))
 		return FALSE;
+	if (proxy != NULL) {
+		pk_backend_job_set_proxy (transaction->job,
+					  proxy->http,
+					  proxy->https,
+					  proxy->ftp,
+					  proxy->socks,
+					  proxy->no_proxy,
+					  proxy->pac);
 	}
-
-	/* get from database */
-	ret = pk_transaction_db_get_proxy (transaction->transaction_db,
-					   transaction->client_uid,
-					   session,
-					   &proxy_http,
-					   &proxy_https,
-					   &proxy_ftp,
-					   &proxy_socks,
-					   &no_proxy,
-					   &pac);
-	if (!ret) {
-		g_set_error_literal (error, 1, 0, "failed to get the proxy from the database");
-		return FALSE;
-	}
-
-	/* try to set the new proxy */
-	pk_backend_job_set_proxy (transaction->job,
-				  proxy_http,
-				  proxy_https,
-				  proxy_ftp,
-				  proxy_socks,
-				  no_proxy,
-				  pac);
 
 	/* try to set the new uid and cmdline */
 	cmdline = g_strdup_printf ("PackageKit: %s", pk_role_enum_to_string (transaction->role));
@@ -1864,12 +1925,12 @@ pk_transaction_run (PkTransaction *transaction)
 
 	/* do the correct action with the cached parameters */
 	switch (transaction->role) {
-	case PK_ROLE_ENUM_DEPENDS_ON:
-		pk_backend_depends_on (transaction->backend,
-				       transaction->job,
-				       transaction->cached_filters,
-				       transaction->cached_package_ids,
-				       transaction->cached_force);
+	case PK_ROLE_ENUM_GET_DEPENDENCIES:
+		pk_backend_get_dependencies (transaction->backend,
+					     transaction->job,
+					     transaction->cached_filters,
+					     transaction->cached_package_ids,
+					     transaction->cached_force);
 		break;
 	case PK_ROLE_ENUM_GET_UPDATE_DETAIL:
 		pk_backend_get_update_detail (transaction->backend,
@@ -1896,12 +1957,12 @@ pk_transaction_run (PkTransaction *transaction)
 	case PK_ROLE_ENUM_GET_DETAILS_LOCAL:
 		pk_backend_get_details_local (transaction->backend,
 					      transaction->job,
-					      transaction->cached_full_paths);
+					      transaction->cached_fds);
 		break;
 	case PK_ROLE_ENUM_GET_FILES_LOCAL:
 		pk_backend_get_files_local (transaction->backend,
 					    transaction->job,
-					    transaction->cached_full_paths);
+					    transaction->cached_fds);
 		break;
 	case PK_ROLE_ENUM_GET_DISTRO_UPGRADES:
 		pk_backend_get_distro_upgrades (transaction->backend, transaction->job);
@@ -1911,12 +1972,12 @@ pk_transaction_run (PkTransaction *transaction)
 				      transaction->job,
 				      transaction->cached_package_ids);
 		break;
-	case PK_ROLE_ENUM_REQUIRED_BY:
-		pk_backend_required_by (transaction->backend,
-					transaction->job,
-					transaction->cached_filters,
-					transaction->cached_package_ids,
-					transaction->cached_force);
+	case PK_ROLE_ENUM_GET_DEPENDENTS:
+		pk_backend_get_dependents (transaction->backend,
+					   transaction->job,
+					   transaction->cached_filters,
+					   transaction->cached_package_ids,
+					   transaction->cached_force);
 		break;
 	case PK_ROLE_ENUM_WHAT_PROVIDES:
 		pk_backend_what_provides (transaction->backend,
@@ -1968,7 +2029,7 @@ pk_transaction_run (PkTransaction *transaction)
 		pk_backend_install_files (transaction->backend,
 					  transaction->job,
 					  transaction->cached_transaction_flags,
-					  transaction->cached_full_paths);
+					  transaction->cached_fds);
 		break;
 	case PK_ROLE_ENUM_INSTALL_SIGNATURE:
 		pk_backend_install_signature (transaction->backend,
@@ -2035,7 +2096,7 @@ pk_transaction_run (PkTransaction *transaction)
 		break;
 	/* handled in the engine without a transaction */
 	case PK_ROLE_ENUM_CANCEL:
-	case PK_ROLE_ENUM_GET_OLD_TRANSACTIONS:
+	case PK_ROLE_ENUM_GET_HISTORY:
 	case PK_ROLE_ENUM_ACCEPT_EULA:
 		g_warning ("role %s should be handled by engine",
 			   pk_role_enum_to_string (transaction->role));
@@ -2595,6 +2656,14 @@ pk_transaction_role_to_actions (PkRoleEnum role, guint64 transaction_flags)
 		g_ptr_array_add (result, g_strdup ("org.freedesktop.packagekit.package-reinstall"));
 	}
 
+	/* purging deletes the data of every package the transaction removes, so it
+	 * needs the same authorization as removing packages (RemovePackages already
+	 * checks it as its role action) */
+	if (role != PK_ROLE_ENUM_REMOVE_PACKAGES &&
+	    pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_PURGE)) {
+		g_ptr_array_add (result, g_strdup ("org.freedesktop.packagekit.package-remove"));
+	}
+
 	if ((role == PK_ROLE_ENUM_INSTALL_PACKAGES || role == PK_ROLE_ENUM_UPDATE_PACKAGES) &&
 	    pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_ALLOW_DOWNGRADE)) {
 		g_ptr_array_add (result, g_strdup ("org.freedesktop.packagekit.package-downgrade"));
@@ -3011,14 +3080,8 @@ pk_transaction_download_packages (PkTransaction *transaction,
 
 	/* create cache directory */
 	if (!store_in_cache) {
-		g_autofree gchar *root_dir = pk_util_get_root_dir (transaction->conf);
-		directory = g_build_filename (root_dir,
-					      LOCALSTATEDIR,
-					      "cache",
-					      "PackageKit",
-					      "downloads",
-					      transaction->tid,
-					      NULL);
+		g_autofree gchar *cache_dir = pk_util_get_cache_dir (transaction->conf);
+		directory = g_build_filename (cache_dir, "downloads", transaction->tid, NULL);
 		/* rwxrwxr-x */
 		retval = g_mkdir_with_parents (directory, 0775);
 		if (retval != 0) {
@@ -3041,9 +3104,9 @@ out:
 }
 
 static void
-pk_transaction_depends_on (PkTransaction *transaction,
-			   GVariant *params,
-			   GDBusMethodInvocation *context)
+pk_transaction_get_dependencies (PkTransaction *transaction,
+				 GVariant *params,
+				 GDBusMethodInvocation *context)
 {
 	gboolean ret;
 	gchar *package_ids_temp;
@@ -3058,14 +3121,14 @@ pk_transaction_depends_on (PkTransaction *transaction,
 	g_variant_get (params, "(t^a&sb)", &filter, &package_ids, &recursive);
 
 	package_ids_temp = pk_package_ids_to_string (package_ids);
-	g_debug ("DependsOn method called: %s (recursive %i)", package_ids_temp, recursive);
+	g_debug ("GetDependencies method called: %s (recursive %i)", package_ids_temp, recursive);
 
 	/* not implemented yet */
-	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_DEPENDS_ON)) {
+	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_GET_DEPENDENCIES)) {
 		g_set_error (&error,
 			     PK_TRANSACTION_ERROR,
 			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
-			     "DependsOn not supported by backend");
+			     "GetDependencies not supported by backend");
 		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
 		goto out;
 	}
@@ -3086,7 +3149,7 @@ pk_transaction_depends_on (PkTransaction *transaction,
 	transaction->cached_filters = filter;
 	transaction->cached_package_ids = g_strdupv (package_ids);
 	transaction->cached_force = recursive;
-	pk_transaction_set_role (transaction, PK_ROLE_ENUM_DEPENDS_ON);
+	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_DEPENDENCIES);
 	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
 out:
 	pk_transaction_dbus_return (context, error);
@@ -3135,192 +3198,6 @@ pk_transaction_get_details (PkTransaction *transaction,
 	/* save so we can run later */
 	transaction->cached_package_ids = g_strdupv (package_ids);
 	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_DETAILS);
-	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
-out:
-	pk_transaction_dbus_return (context, error);
-}
-
-static void
-pk_transaction_get_details_local (PkTransaction *transaction,
-				  GVariant *params,
-				  GDBusMethodInvocation *context)
-{
-	gboolean ret;
-	GError *error_local = NULL;
-	GError *error = NULL;
-	guint i;
-	guint length;
-	g_autofree gchar *content_type = NULL;
-	g_autofree gchar *files_temp = NULL;
-	g_autofree gchar **full_paths = NULL;
-
-	g_return_if_fail (PK_IS_TRANSACTION (transaction));
-	g_return_if_fail (transaction->tid != NULL);
-
-	g_variant_get (params, "(^a&s)", &full_paths);
-
-	files_temp = pk_package_ids_to_string (full_paths);
-	g_debug ("GetDetailsLocal method called: %s", files_temp);
-
-	/* not implemented yet */
-	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_GET_DETAILS_LOCAL)) {
-		g_set_error (&error,
-			     PK_TRANSACTION_ERROR,
-			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
-			     "GetDetailsLocal not supported by backend");
-		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-		goto out;
-	}
-
-	/* check for empty package list */
-	length = g_strv_length (full_paths);
-	if (length == 0) {
-		g_set_error_literal (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NUMBER_OF_PACKAGES_INVALID,
-				     "No filenames listed");
-		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-		goto out;
-	}
-
-	/* check all files exists and are valid */
-	length = g_strv_length (full_paths);
-	for (i = 0; i < length; i++) {
-
-		/* exists */
-		ret = g_file_test (full_paths[i], G_FILE_TEST_EXISTS);
-		if (!ret) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-
-		/* get content type */
-		content_type = pk_transaction_get_content_type_for_file (full_paths[i],
-									 &error_local);
-		if (content_type == NULL) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-
-		/* supported content type? */
-		ret = pk_transaction_is_supported_content_type (transaction, content_type);
-		if (!ret) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-	}
-
-	/* save so we can run later */
-	transaction->cached_full_paths = g_strdupv (full_paths);
-	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_DETAILS_LOCAL);
-	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
-out:
-	pk_transaction_dbus_return (context, error);
-}
-
-static void
-pk_transaction_get_files_local (PkTransaction *transaction,
-				GVariant *params,
-				GDBusMethodInvocation *context)
-{
-	gboolean ret;
-	GError *error_local = NULL;
-	guint i;
-	guint length;
-	g_autoptr(GError) error = NULL;
-	g_autofree gchar *content_type = NULL;
-	g_autofree gchar *files_temp = NULL;
-	g_autofree gchar **full_paths = NULL;
-
-	g_return_if_fail (PK_IS_TRANSACTION (transaction));
-	g_return_if_fail (transaction->tid != NULL);
-
-	g_variant_get (params, "(^a&s)", &full_paths);
-
-	files_temp = pk_package_ids_to_string (full_paths);
-	g_debug ("GetFilesLocal method called: %s", files_temp);
-
-	/* not implemented yet */
-	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_GET_FILES_LOCAL)) {
-		g_set_error (&error,
-			     PK_TRANSACTION_ERROR,
-			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
-			     "GetFilesLocal not supported by backend");
-		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-		goto out;
-	}
-
-	/* check for empty package list */
-	length = g_strv_length (full_paths);
-	if (length == 0) {
-		g_set_error_literal (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NUMBER_OF_PACKAGES_INVALID,
-				     "No filenames listed");
-		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-		goto out;
-	}
-
-	/* check all files exists and are valid */
-	length = g_strv_length (full_paths);
-	for (i = 0; i < length; i++) {
-
-		/* exists */
-		ret = g_file_test (full_paths[i], G_FILE_TEST_EXISTS);
-		if (!ret) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-
-		/* get content type */
-		content_type = pk_transaction_get_content_type_for_file (full_paths[i],
-									 &error_local);
-		if (content_type == NULL) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-
-		/* supported content type? */
-		ret = pk_transaction_is_supported_content_type (transaction, content_type);
-		if (!ret) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-	}
-
-	/* save so we can run later */
-	transaction->cached_full_paths = g_strdupv (full_paths);
-	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_FILES_LOCAL);
 	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
 out:
 	pk_transaction_dbus_return (context, error);
@@ -3437,79 +3314,182 @@ out:
 }
 
 static void
-pk_transaction_get_old_transactions (PkTransaction *transaction,
-				     GVariant *params,
-				     GDBusMethodInvocation *context)
+pk_transaction_emit_history_batch (PkTransaction *transaction, GVariantBuilder *builder)
 {
-	const gchar *cmdline;
-	const gchar *data;
-	const gchar *modified;
-	const gchar *tid;
-	gboolean succeeded;
+	g_autoptr(GError) error = NULL;
+
+	/* this consumes @builder, which has to be re-initialized to be used again */
+	if (!g_dbus_connection_emit_signal (transaction->connection,
+					    NULL,
+					    transaction->tid,
+					    PK_DBUS_INTERFACE_TRANSACTION,
+					    "History",
+					    g_variant_new ("(a(oa{sv}))", builder),
+					    &error))
+		g_warning ("Failed to emit History signal: %s", error->message);
+}
+
+/*
+ * pk_transaction_history_packages_to_variant:
+ * @packages: (element-type PkPackage): a #GPtrArray of #PkPackage
+ *
+ * Build the `packages` value of a past transaction as `a(uss)`
+ */
+static GVariant *
+pk_transaction_history_packages_to_variant (GPtrArray *packages)
+{
+	GVariantBuilder builder;
+
+	g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(uss)"));
+	for (guint i = 0; i < packages->len; i++) {
+		PkPackage *pkg = g_ptr_array_index (packages, i);
+		const gchar *summary = pk_package_get_summary (pkg);
+		g_variant_builder_add (&builder,
+				       "(uss)",
+				       pk_package_get_info (pkg),
+				       pk_package_get_id (pkg),
+				       summary != NULL ? summary : "");
+	}
+	return g_variant_builder_end (&builder);
+}
+
+static gboolean
+pk_transaction_history_package_matches (PkPackage *pkg, PkBitfield flags, gchar **names)
+{
+	if (names[0] != NULL &&
+	    !g_strv_contains ((const gchar *const *) names, pk_package_get_name (pkg)))
+		return FALSE;
+	if (!pk_bitfield_contain (flags, PK_HISTORY_FLAG_ENUM_PACKAGE_CHANGES))
+		return TRUE;
+	switch (pk_package_get_info (pkg)) {
+	case PK_INFO_ENUM_INSTALLING:
+	case PK_INFO_ENUM_REMOVING:
+	case PK_INFO_ENUM_UPDATING:
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+static void
+pk_transaction_get_history (PkTransaction *transaction,
+			    GVariant *params,
+			    GDBusMethodInvocation *context)
+{
+	g_auto(GVariantBuilder) builder = G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE ("a(oa{sv})"));
 	GList *l;
 	GList *transactions = NULL;
-	guint duration;
+	GPtrArray *packages;
+	gboolean filter_packages;
+	guint count;
+	guint db_limit;
 	guint idle_id;
-	guint number;
-	guint uid;
-	PkRoleEnum role;
-	PkTransactionPast *item;
+	guint n_in_batch = 0;
+	guint n_items = 0;
+	PkBitfield flags;
+	PkHistoryItem *item;
+	g_autofree gchar **names = NULL;
 
 	g_return_if_fail (PK_IS_TRANSACTION (transaction));
 	g_return_if_fail (transaction->tid != NULL);
 
-	g_variant_get (params, "(u)", &number);
+	g_variant_get (params, "(tu^a&s)", &flags, &count, &names);
 
-	g_debug ("GetOldTransactions method called");
+	g_debug ("GetHistory method called");
 
-	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_OLD_TRANSACTIONS);
-	transactions = pk_transaction_db_get_list (transaction->transaction_db, number);
+	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_HISTORY);
+
+	/* filters skip rows, so the database cannot apply @count for us */
+	filter_packages = names[0] != NULL ||
+			  pk_bitfield_contain (flags, PK_HISTORY_FLAG_ENUM_PACKAGE_CHANGES);
+	if (filter_packages || pk_bitfield_contain (flags, PK_HISTORY_FLAG_ENUM_SUCCEEDED))
+		db_limit = 0;
+	else
+		db_limit = count;
+	transactions = pk_transaction_db_get_list (transaction->transaction_db, db_limit);
 	for (l = transactions; l != NULL; l = l->next) {
-		item = PK_TRANSACTION_PAST (l->data);
+		GVariantBuilder dict;
+		item = PK_HISTORY_ITEM (l->data);
+
+		if (count > 0 && n_items >= count)
+			break;
+		if (pk_bitfield_contain (flags, PK_HISTORY_FLAG_ENUM_SUCCEEDED) &&
+		    !pk_history_item_get_succeeded (item))
+			continue;
+		if (filter_packages) {
+			g_autoptr(GPtrArray) filtered = NULL;
+
+			filtered = g_ptr_array_new_with_free_func (g_object_unref);
+			packages = pk_history_item_get_packages (item);
+			for (guint i = 0; packages != NULL && i < packages->len; i++) {
+				PkPackage *pkg = g_ptr_array_index (packages, i);
+				if (pk_transaction_history_package_matches (pkg, flags, names))
+					g_ptr_array_add (filtered, g_object_ref (pkg));
+			}
+			if (filtered->len == 0)
+				continue;
+			g_object_set (item, "packages", filtered, NULL);
+		}
+		n_items++;
 
 		/* add to results */
-		pk_results_add_transaction (transaction->results, item);
-
-		/* get data */
-		role = pk_transaction_past_get_role (item);
-		tid = pk_transaction_past_get_id (item);
-		modified = pk_transaction_past_get_timespec (item);
-		succeeded = pk_transaction_past_get_succeeded (item);
-		duration = pk_transaction_past_get_duration (item);
-		data = pk_transaction_past_get_data (item);
-		uid = pk_transaction_past_get_uid (item);
-		cmdline = pk_transaction_past_get_cmdline (item);
+		pk_results_add_history_item (transaction->results, item);
 
 		/* emit */
-		g_debug ("adding transaction %s, %s, %i, %s, %i, %s, %i, %s",
-			 tid,
-			 modified,
-			 succeeded,
-			 pk_role_enum_to_string (role),
-			 duration,
-			 data,
-			 uid,
-			 cmdline);
-		g_dbus_connection_emit_signal (transaction->connection,
-					       NULL,
-					       transaction->tid,
-					       PK_DBUS_INTERFACE_TRANSACTION,
-					       "Transaction",
-					       g_variant_new ("(osbuusus)",
-							      tid,
-							      modified,
-							      succeeded,
-							      role,
-							      duration,
-							      data != NULL ? data : "",
-							      uid,
-							      cmdline != NULL ? cmdline : ""),
-					       NULL);
+		g_debug ("adding transaction %s", pk_history_item_get_id (item));
+		g_variant_builder_init (&dict, G_VARIANT_TYPE ("a{sv}"));
+		if (pk_history_item_get_time_started (item) != NULL) {
+			g_autofree gchar *time_started = g_date_time_format_iso8601 (
+			    pk_history_item_get_time_started (item));
+			pk_transaction_dict_add_string (&dict, "time-started", time_started);
+		}
+		g_variant_builder_add (
+		    &dict,
+		    "{sv}",
+		    "succeeded",
+		    g_variant_new_boolean (pk_history_item_get_succeeded (item)));
+		if (pk_history_item_get_role (item) != PK_ROLE_ENUM_UNKNOWN)
+			g_variant_builder_add (
+			    &dict,
+			    "{sv}",
+			    "role",
+			    g_variant_new_uint32 (pk_history_item_get_role (item)));
+		g_variant_builder_add (&dict,
+				       "{sv}",
+				       "duration",
+				       g_variant_new_uint32 (pk_history_item_get_duration (item)));
+		packages = pk_history_item_get_packages (item);
+		if (packages != NULL && packages->len > 0)
+			g_variant_builder_add (
+			    &dict,
+			    "{sv}",
+			    "packages",
+			    pk_transaction_history_packages_to_variant (packages));
+		if (pk_history_item_get_uid (item) != G_MAXUINT)
+			g_variant_builder_add (
+			    &dict,
+			    "{sv}",
+			    "uid",
+			    g_variant_new_uint32 (pk_history_item_get_uid (item)));
+		pk_transaction_dict_add_string (&dict,
+						"cmdline",
+						pk_history_item_get_cmdline (item));
+		g_variant_builder_add (&builder, "(oa{sv})", pk_history_item_get_id (item), &dict);
+		n_in_batch++;
+
+		/* emit a full batch and start a new one */
+		if (n_in_batch >= PK_HISTORY_BATCH_SIZE) {
+			pk_transaction_emit_history_batch (transaction, &builder);
+			g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(oa{sv})"));
+			n_in_batch = 0;
+		}
 	}
+	if (n_in_batch > 0)
+		pk_transaction_emit_history_batch (transaction, &builder);
 	g_list_free_full (transactions, (GDestroyNotify) g_object_unref);
 
 	idle_id = g_idle_add ((GSourceFunc) pk_transaction_finished_idle_cb, transaction);
-	g_source_set_name_by_id (idle_id, "[PkTransaction] finished from get-old-transactions");
+	g_source_set_name_by_id (idle_id, "[PkTransaction] finished from get-history");
 
 	pk_transaction_dbus_return (context, NULL);
 }
@@ -3548,9 +3528,9 @@ out:
 }
 
 static void
-pk_transaction_required_by (PkTransaction *transaction,
-			    GVariant *params,
-			    GDBusMethodInvocation *context)
+pk_transaction_get_dependents (PkTransaction *transaction,
+			       GVariant *params,
+			       GDBusMethodInvocation *context)
 {
 	gboolean ret;
 	PkBitfield filter;
@@ -3565,14 +3545,14 @@ pk_transaction_required_by (PkTransaction *transaction,
 	g_variant_get (params, "(t^a&sb)", &filter, &package_ids, &recursive);
 
 	package_ids_temp = pk_package_ids_to_string (package_ids);
-	g_debug ("RequiredBy method called: %s (recursive %i)", package_ids_temp, recursive);
+	g_debug ("GetDependents method called: %s (recursive %i)", package_ids_temp, recursive);
 
 	/* not implemented yet */
-	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_REQUIRED_BY)) {
+	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_GET_DEPENDENTS)) {
 		g_set_error (&error,
 			     PK_TRANSACTION_ERROR,
 			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
-			     "RequiredBy not supported by backend");
+			     "GetDependents not supported by backend");
 		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
 		goto out;
 	}
@@ -3593,7 +3573,7 @@ pk_transaction_required_by (PkTransaction *transaction,
 	transaction->cached_filters = filter;
 	transaction->cached_package_ids = g_strdupv (package_ids);
 	transaction->cached_force = recursive;
-	pk_transaction_set_role (transaction, PK_ROLE_ENUM_REQUIRED_BY);
+	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_DEPENDENTS);
 	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
 out:
 	pk_transaction_dbus_return (context, error);
@@ -3680,48 +3660,128 @@ out:
 	pk_transaction_dbus_return (context, error);
 }
 
-static gchar *
-pk_transaction_get_content_type_for_file (const gchar *filename, GError **error)
+/*
+ * pk_transaction_set_files:
+ *
+ * Shared by the methods that take package files from the client. The files
+ * arrive as fds. Only the shape of the request is checked here, the job copies
+ * or checks each file right before the backend reads it.
+ */
+static gboolean
+pk_transaction_set_files (PkTransaction *transaction,
+			  PkRoleEnum role,
+			  GVariant *handles,
+			  GDBusMethodInvocation *context,
+			  GError **error)
 {
-	g_autoptr(GError) error_local = NULL;
-	g_autoptr(GFile) file = NULL;
-	g_autoptr(GFileInfo) info = NULL;
+	GUnixFDList *fd_list = NULL;
+	const gint32 *h;
+	gsize n_handles = 0;
 
-	/* get file info synchronously */
-	file = g_file_new_for_path (filename);
-	info = g_file_query_info (file,
-				  "standard::content-type",
-				  G_FILE_QUERY_INFO_NONE,
-				  NULL,
-				  &error_local);
-	if (info == NULL) {
+	/* not implemented yet */
+	if (!pk_backend_is_implemented (transaction->backend, role)) {
 		g_set_error (error,
-			     1,
-			     0,
-			     "failed to get file attributes for %s: %s",
-			     filename,
-			     error_local->message);
-		return NULL;
+			     PK_TRANSACTION_ERROR,
+			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
+			     "%s not supported by backend",
+			     pk_role_enum_to_string (role));
+		return FALSE;
 	}
 
-	/* get content type as string */
-	return g_file_info_get_attribute_as_string (info, "standard::content-type");
+	/* every handle has to name a fd that came with the message, in order */
+	if (context != NULL) {
+		fd_list = g_dbus_message_get_unix_fd_list (
+		    g_dbus_method_invocation_get_message (context));
+	}
+	h = g_variant_get_fixed_array (handles, &n_handles, sizeof (gint32));
+	if (n_handles == 0) {
+		g_set_error_literal (error,
+				     PK_TRANSACTION_ERROR,
+				     PK_TRANSACTION_ERROR_NUMBER_OF_PACKAGES_INVALID,
+				     "No files listed");
+		return FALSE;
+	}
+	if (fd_list == NULL || (gsize) g_unix_fd_list_get_length (fd_list) != n_handles) {
+		g_set_error (error,
+			     PK_TRANSACTION_ERROR,
+			     PK_TRANSACTION_ERROR_INPUT_INVALID,
+			     "expected %" G_GSIZE_FORMAT " file descriptors",
+			     n_handles);
+		return FALSE;
+	}
+	for (gsize i = 0; i < n_handles; i++) {
+		if (h[i] != (gint32) i) {
+			g_set_error_literal (error,
+					     PK_TRANSACTION_ERROR,
+					     PK_TRANSACTION_ERROR_INPUT_INVALID,
+					     "file handles have to be 0..n-1 in order");
+			return FALSE;
+		}
+	}
+
+	/* save so we can run later */
+	transaction->cached_fds = g_object_ref (fd_list);
+	return TRUE;
 }
 
-static gboolean
-pk_transaction_is_supported_content_type (PkTransaction *transaction, const gchar *content_type)
+static void
+pk_transaction_get_details_local (PkTransaction *transaction,
+				  GVariant *params,
+				  GDBusMethodInvocation *context)
 {
-	const gchar *tmp;
-	GPtrArray *array = transaction->supported_content_types;
-	guint i;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GVariant) handles = NULL;
 
-	/* can we support this one? */
-	for (i = 0; i < array->len; i++) {
-		tmp = g_ptr_array_index (array, i);
-		if (g_strcmp0 (tmp, content_type) == 0)
-			return TRUE;
+	g_return_if_fail (PK_IS_TRANSACTION (transaction));
+	g_return_if_fail (transaction->tid != NULL);
+
+	g_variant_get (params, "(@ah)", &handles);
+	g_debug ("GetDetailsLocal method called: %" G_GSIZE_FORMAT " files",
+		 g_variant_n_children (handles));
+
+	if (!pk_transaction_set_files (transaction,
+				       PK_ROLE_ENUM_GET_DETAILS_LOCAL,
+				       handles,
+				       context,
+				       &error)) {
+		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
+		goto out;
 	}
-	return FALSE;
+	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_DETAILS_LOCAL);
+	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
+
+out:
+	pk_transaction_dbus_return (context, error);
+}
+
+static void
+pk_transaction_get_files_local (PkTransaction *transaction,
+				GVariant *params,
+				GDBusMethodInvocation *context)
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GVariant) handles = NULL;
+
+	g_return_if_fail (PK_IS_TRANSACTION (transaction));
+	g_return_if_fail (transaction->tid != NULL);
+
+	g_variant_get (params, "(@ah)", &handles);
+	g_debug ("GetFilesLocal method called: %" G_GSIZE_FORMAT " files",
+		 g_variant_n_children (handles));
+
+	if (!pk_transaction_set_files (transaction,
+				       PK_ROLE_ENUM_GET_FILES_LOCAL,
+				       handles,
+				       context,
+				       &error)) {
+		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
+		goto out;
+	}
+	pk_transaction_set_role (transaction, PK_ROLE_ENUM_GET_FILES_LOCAL);
+	pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_READY);
+
+out:
+	pk_transaction_dbus_return (context, error);
 }
 
 static void
@@ -3729,82 +3789,41 @@ pk_transaction_install_files (PkTransaction *transaction,
 			      GVariant *params,
 			      GDBusMethodInvocation *context)
 {
-	gboolean ret;
-	GError *error_local = NULL;
-	guint length;
-	guint i;
 	PkBitfield transaction_flags;
 	g_autoptr(GError) error = NULL;
-	g_autofree gchar *content_type = NULL;
-	g_autofree gchar **full_paths = NULL;
-	g_autofree gchar *full_paths_temp = NULL;
+	g_autoptr(GVariant) handles = NULL;
 	g_autofree gchar *transaction_flags_temp = NULL;
 
 	g_return_if_fail (PK_IS_TRANSACTION (transaction));
 	g_return_if_fail (transaction->tid != NULL);
 
-	g_variant_get (params, "(t^a&s)", &transaction_flags, &full_paths);
-
-	full_paths_temp = pk_package_ids_to_string (full_paths);
+	g_variant_get (params, "(t@ah)", &transaction_flags, &handles);
 	transaction_flags_temp = pk_transaction_flag_bitfield_to_string (transaction_flags);
-	g_debug ("InstallFiles method called: %s (transaction_flags: %s)",
-		 full_paths_temp,
+	g_debug ("InstallFiles method called: %" G_GSIZE_FORMAT " files (transaction_flags: %s)",
+		 g_variant_n_children (handles),
 		 transaction_flags_temp);
 
-	/* not implemented yet */
-	if (!pk_backend_is_implemented (transaction->backend, PK_ROLE_ENUM_INSTALL_FILES)) {
+	/* purging is a removal modifier, it makes no sense when installing */
+	if (pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_PURGE)) {
 		g_set_error (&error,
 			     PK_TRANSACTION_ERROR,
 			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
-			     "InstallFiles not supported by backend");
+			     "The purge flag is not valid for InstallFiles");
 		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
 		goto out;
 	}
 
-	/* check all files exists and are valid */
-	length = g_strv_length (full_paths);
-	for (i = 0; i < length; i++) {
-		/* exists */
-		ret = g_file_test (full_paths[i], G_FILE_TEST_EXISTS);
-		if (!ret) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-
-		/* get content type */
-		content_type = pk_transaction_get_content_type_for_file (full_paths[i],
-									 &error_local);
-		if (content_type == NULL) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
-
-		/* supported content type? */
-		ret = pk_transaction_is_supported_content_type (transaction, content_type);
-		if (!ret) {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-				     "File %s is not found or unsupported",
-				     full_paths[i]);
-			pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-			goto out;
-		}
+	if (!pk_transaction_set_files (transaction,
+				       PK_ROLE_ENUM_INSTALL_FILES,
+				       handles,
+				       context,
+				       &error)) {
+		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
+		goto out;
 	}
 
 	/* save so we can run later */
 	transaction->cached_transaction_flags = transaction_flags;
-	transaction->cached_full_paths = g_strdupv (full_paths);
 	pk_transaction_set_role (transaction, PK_ROLE_ENUM_INSTALL_FILES);
 
 	/* this changed */
@@ -3813,11 +3832,9 @@ pk_transaction_install_files (PkTransaction *transaction,
 					      g_variant_new_uint64 (transaction_flags));
 
 	/* try to get authorization */
-	ret = pk_transaction_obtain_authorization (transaction, PK_ROLE_ENUM_INSTALL_FILES, &error);
-	if (!ret) {
+	if (!pk_transaction_obtain_authorization (transaction, PK_ROLE_ENUM_INSTALL_FILES, &error))
 		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
-		goto out;
-	}
+
 out:
 	pk_transaction_dbus_return (context, error);
 }
@@ -3855,6 +3872,16 @@ pk_transaction_install_packages (PkTransaction *transaction,
 		goto out;
 	}
 
+	/* purging is a removal modifier, it makes no sense when installing */
+	if (pk_bitfield_contain (transaction_flags, PK_TRANSACTION_FLAG_ENUM_PURGE)) {
+		g_set_error (&error,
+			     PK_TRANSACTION_ERROR,
+			     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
+			     "The purge flag is not valid for InstallPackages");
+		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
+		goto out;
+	}
+
 	/* check package_ids */
 	ret = pk_package_ids_check (package_ids);
 	if (!ret) {
@@ -3885,6 +3912,7 @@ pk_transaction_install_packages (PkTransaction *transaction,
 		pk_transaction_set_state (transaction, PK_TRANSACTION_STATE_ERROR);
 		goto out;
 	}
+
 out:
 	pk_transaction_dbus_return (context, error);
 }
@@ -4496,108 +4524,56 @@ out:
 }
 
 static gboolean
+pk_transaction_hint_check_type (const gchar *key,
+				GVariant *value,
+				const GVariantType *type,
+				GError **error)
+{
+	if (g_variant_is_of_type (value, type))
+		return TRUE;
+	g_set_error (error,
+		     PK_TRANSACTION_ERROR,
+		     PK_TRANSACTION_ERROR_INPUT_INVALID,
+		     "hint '%s' expects type '%s', not '%s'",
+		     key,
+		     (const gchar *) type,
+		     g_variant_get_type_string (value));
+	return FALSE;
+}
+
+static gboolean
 pk_transaction_set_hint (PkTransaction *transaction,
 			 const gchar *key,
-			 const gchar *value,
+			 GVariant *value,
 			 GError **error)
 {
-	/* locale=en_GB.utf8 */
 	if (g_strcmp0 (key, "locale") == 0) {
-		pk_backend_job_set_locale (transaction->job, value);
+		if (!pk_transaction_hint_check_type (key, value, G_VARIANT_TYPE_STRING, error))
+			return FALSE;
+		pk_backend_job_set_locale (transaction->job, g_variant_get_string (value, NULL));
 		return TRUE;
 	}
 
-	/* frontend_socket=/tmp/socket.3456 */
-	if (g_strcmp0 (key, "frontend-socket") == 0) {
-		GStatBuf st;
-
-		/* nothing provided */
-		if (value == NULL || value[0] == '\0') {
-			g_set_error_literal (error,
-					     PK_TRANSACTION_ERROR,
-					     PK_TRANSACTION_ERROR_INPUT_INVALID,
-					     "Could not set frontend-socket to nothing");
-			return FALSE;
-		}
-
-		/* nothing provided */
-		if (value[0] != '/') {
-			g_set_error_literal (error,
-					     PK_TRANSACTION_ERROR,
-					     PK_TRANSACTION_ERROR_INPUT_INVALID,
-					     "frontend-socket has to be an absolute path");
-			return FALSE;
-		}
-
-		/* must be an actual socket and must not be a symlink:
-		 * lstat() doesn't follow symlinks (which would let callers
-		 * probe arbitrary paths as root), and allows us to reject
-		 * anything that is not a Unix socket */
-		if (g_lstat (value, &st) != 0) {
-			g_set_error_literal (error,
-					     PK_TRANSACTION_ERROR,
-					     PK_TRANSACTION_ERROR_NO_SUCH_FILE,
-					     "frontend-socket does not exist");
-			return FALSE;
-		}
-		if (!S_ISSOCK (st.st_mode)) {
-			g_set_error_literal (error,
-					     PK_TRANSACTION_ERROR,
-					     PK_TRANSACTION_ERROR_INPUT_INVALID,
-					     "frontend-socket is not a socket");
-			return FALSE;
-		}
-
-		/* success */
-		pk_backend_job_set_frontend_socket (transaction->job, value);
-		return TRUE;
-	}
-
-	/* background=true */
 	if (g_strcmp0 (key, "background") == 0) {
-		if (g_strcmp0 (value, "true") == 0) {
-			pk_backend_job_set_background (transaction->job, TRUE);
-		} else if (g_strcmp0 (value, "false") == 0) {
-			pk_backend_job_set_background (transaction->job, FALSE);
-		} else {
-			g_set_error (error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_INPUT_INVALID,
-				     "background hint expects true or false, not %s",
-				     value);
+		if (!pk_transaction_hint_check_type (key, value, G_VARIANT_TYPE_BOOLEAN, error))
 			return FALSE;
-		}
+		pk_backend_job_set_background (transaction->job, g_variant_get_boolean (value));
 		return TRUE;
 	}
 
-	/* interactive=true */
 	if (g_strcmp0 (key, "interactive") == 0) {
-		if (g_strcmp0 (value, "true") == 0) {
-			pk_backend_job_set_interactive (transaction->job, TRUE);
-		} else if (g_strcmp0 (value, "false") == 0) {
-			pk_backend_job_set_interactive (transaction->job, FALSE);
-		} else {
-			g_set_error (error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_INPUT_INVALID,
-				     "interactive hint expects true or false, not %s",
-				     value);
+		if (!pk_transaction_hint_check_type (key, value, G_VARIANT_TYPE_BOOLEAN, error))
 			return FALSE;
-		}
+		pk_backend_job_set_interactive (transaction->job, g_variant_get_boolean (value));
 		return TRUE;
 	}
 
-	/* cache-age=<time-in-seconds> */
 	if (g_strcmp0 (key, "cache-age") == 0) {
 		guint cache_age;
-		if (!pk_strtouint (value, &cache_age)) {
-			g_set_error (error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_INPUT_INVALID,
-				     "cannot parse cache age value %s",
-				     value);
+
+		if (!pk_transaction_hint_check_type (key, value, G_VARIANT_TYPE_UINT32, error))
 			return FALSE;
-		}
+		cache_age = g_variant_get_uint32 (value);
 		if (cache_age == 0) {
 			g_set_error_literal (error,
 					     PK_TRANSACTION_ERROR,
@@ -4609,27 +4585,78 @@ pk_transaction_set_hint (PkTransaction *transaction,
 		return TRUE;
 	}
 
-	/* details-with-deps-size=true */
-	if (g_strcmp0 (key, "details-with-deps-size") == 0) {
-		if (g_strcmp0 (value, "true") == 0) {
-			pk_backend_job_set_details_with_deps_size (transaction->job, TRUE);
-		} else if (g_strcmp0 (value, "false") == 0) {
-			pk_backend_job_set_details_with_deps_size (transaction->job, FALSE);
-		} else {
-			g_set_error (error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_INPUT_INVALID,
-				     "details-with-deps-size hint expects true or false, not %s",
-				     value);
-			return FALSE;
-		}
-		return TRUE;
-	}
-
 	/* to preserve forwards and backwards compatibility, we ignore
 	 * extra options here */
-	g_warning ("unknown option: %s with value %s", key, value);
+	g_warning ("unknown hint: %s", key);
 	return TRUE;
+}
+
+static void
+pk_transaction_get_frontend_socket (PkTransaction *transaction,
+				    GVariant *params,
+				    GDBusMethodInvocation *context)
+{
+	gint handle;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GUnixFDList) fds = g_unix_fd_list_new ();
+
+	g_return_if_fail (PK_IS_TRANSACTION (transaction));
+	g_return_if_fail (transaction->tid != NULL);
+
+	g_debug ("GetFrontendSocket method called");
+
+	if (!pk_backend_supports_frontend_socket (transaction->backend)) {
+		g_set_error_literal (&error,
+				     PK_TRANSACTION_ERROR,
+				     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
+				     "GetFrontendSocket not supported by backend");
+		pk_transaction_dbus_return (context, error);
+		return;
+	}
+
+	if (transaction->frontend_socket == NULL) {
+		g_autofree gchar *runtime_dir = NULL;
+		g_autofree gchar *name = NULL;
+		g_autofree gchar *path = NULL;
+		g_autoptr(GSocketAddress) address = NULL;
+		g_autoptr(GSocket) socket = NULL;
+
+		/* the runtime dir is private to root, as are the backend processes
+		 * that connect to the socket */
+		runtime_dir = pk_util_get_runtime_dir (transaction->conf, &error);
+		if (runtime_dir == NULL)
+			goto out;
+		name = g_path_get_basename (transaction->tid);
+		path = g_strdup_printf ("%s/frontend-%s.sock", runtime_dir, name);
+		socket = g_socket_new (G_SOCKET_FAMILY_UNIX,
+				       G_SOCKET_TYPE_STREAM,
+				       G_SOCKET_PROTOCOL_DEFAULT,
+				       &error);
+		if (socket == NULL)
+			goto out;
+		address = g_unix_socket_address_new (path);
+		if (!g_socket_bind (socket, address, TRUE, &error) ||
+		    !g_socket_listen (socket, &error))
+			goto out;
+		transaction->frontend_socket = g_steal_pointer (&socket);
+		transaction->frontend_socket_path = g_steal_pointer (&path);
+		pk_backend_job_set_frontend_socket (transaction->job,
+						    transaction->frontend_socket_path);
+	}
+
+	handle = g_unix_fd_list_append (fds,
+					g_socket_get_fd (transaction->frontend_socket),
+					&error);
+	if (handle < 0)
+		goto out;
+	g_dbus_method_invocation_return_value_with_unix_fd_list (context,
+								 g_variant_new ("(h)", handle),
+								 fds);
+	return;
+
+out:
+	g_prefix_error (&error, "cannot create frontend socket: ");
+	pk_transaction_dbus_return (context, error);
 }
 
 static void
@@ -4637,40 +4664,25 @@ pk_transaction_set_hints (PkTransaction *transaction,
 			  GVariant *params,
 			  GDBusMethodInvocation *context)
 {
-	gboolean ret;
-	guint i;
-	g_autofree gchar **hints = NULL;
+	const gchar *key;
+	GVariant *value;
+	g_autoptr(GVariantIter) iter = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autofree gchar *dbg = NULL;
 
 	g_return_if_fail (PK_IS_TRANSACTION (transaction));
 	g_return_if_fail (transaction->tid != NULL);
 
-	g_variant_get (params, "(^a&s)", &hints);
-	dbg = g_strjoinv (", ", (gchar **) hints);
+	dbg = g_variant_print (params, FALSE);
 	g_debug ("SetHints method called: %s", dbg);
 
-	/* parse */
-	for (i = 0; hints[i] != NULL; i++) {
-		g_auto(GStrv) sections = NULL;
-		sections = g_strsplit (hints[i], "=", 2);
-		if (g_strv_length (sections) == 2) {
-			ret = pk_transaction_set_hint (transaction,
-						       sections[0],
-						       sections[1],
-						       &error);
-			if (!ret)
-				goto out;
-		} else {
-			g_set_error (&error,
-				     PK_TRANSACTION_ERROR,
-				     PK_TRANSACTION_ERROR_NOT_SUPPORTED,
-				     "Could not parse hint '%s'",
-				     hints[i]);
-			goto out;
+	g_variant_get (params, "(a{sv})", &iter);
+	while (g_variant_iter_loop (iter, "{&sv}", &key, &value)) {
+		if (!pk_transaction_set_hint (transaction, key, value, &error)) {
+			g_variant_unref (value);
+			break;
 		}
 	}
-out:
 	pk_transaction_dbus_return (context, error);
 }
 
@@ -5002,6 +5014,10 @@ pk_transaction_method_call (GDBusConnection *connection_,
 		return;
 	}
 
+	if (g_strcmp0 (method_name, "GetFrontendSocket") == 0) {
+		pk_transaction_get_frontend_socket (transaction, parameters, invocation);
+		return;
+	}
 	if (g_strcmp0 (method_name, "AcceptEula") == 0) {
 		pk_transaction_accept_eula (transaction, parameters, invocation);
 		return;
@@ -5010,8 +5026,8 @@ pk_transaction_method_call (GDBusConnection *connection_,
 		pk_transaction_download_packages (transaction, parameters, invocation);
 		return;
 	}
-	if (g_strcmp0 (method_name, "DependsOn") == 0) {
-		pk_transaction_depends_on (transaction, parameters, invocation);
+	if (g_strcmp0 (method_name, "GetDependencies") == 0) {
+		pk_transaction_get_dependencies (transaction, parameters, invocation);
 		return;
 	}
 	if (g_strcmp0 (method_name, "GetDetails") == 0) {
@@ -5030,8 +5046,8 @@ pk_transaction_method_call (GDBusConnection *connection_,
 		pk_transaction_get_files (transaction, parameters, invocation);
 		return;
 	}
-	if (g_strcmp0 (method_name, "GetOldTransactions") == 0) {
-		pk_transaction_get_old_transactions (transaction, parameters, invocation);
+	if (g_strcmp0 (method_name, "GetHistory") == 0) {
+		pk_transaction_get_history (transaction, parameters, invocation);
 		return;
 	}
 	if (g_strcmp0 (method_name, "GetPackages") == 0) {
@@ -5042,8 +5058,8 @@ pk_transaction_method_call (GDBusConnection *connection_,
 		pk_transaction_get_repo_list (transaction, parameters, invocation);
 		return;
 	}
-	if (g_strcmp0 (method_name, "RequiredBy") == 0) {
-		pk_transaction_required_by (transaction, parameters, invocation);
+	if (g_strcmp0 (method_name, "GetDependents") == 0) {
+		pk_transaction_get_dependents (transaction, parameters, invocation);
 		return;
 	}
 	if (g_strcmp0 (method_name, "GetUpdateDetail") == 0) {
@@ -5235,7 +5251,6 @@ pk_transaction_init (PkTransaction *transaction)
 	transaction->state = PK_TRANSACTION_STATE_UNKNOWN;
 	transaction->dbus = pk_dbus_new ();
 	transaction->results = pk_results_new ();
-	transaction->supported_content_types = g_ptr_array_new_with_free_func (g_free);
 	transaction->cancellable = g_cancellable_new ();
 }
 
@@ -5306,6 +5321,16 @@ pk_transaction_finalize (GObject *object)
 	g_strfreev (transaction->cached_package_ids);
 	g_free (transaction->cached_transaction_id);
 	g_free (transaction->cached_directory);
+	g_clear_object (&transaction->cached_fds);
+	if (transaction->frontend_socket != NULL) {
+		/* the client and its agent hold copies of the socket: shutting
+		 * it down tells them the transaction is gone */
+		g_socket_shutdown (transaction->frontend_socket, TRUE, TRUE, NULL);
+		g_socket_close (transaction->frontend_socket, NULL);
+		g_unlink (transaction->frontend_socket_path);
+	}
+	g_clear_object (&transaction->frontend_socket);
+	g_free (transaction->frontend_socket_path);
 	g_strfreev (transaction->cached_values);
 	g_free (transaction->cached_repo_id);
 	g_free (transaction->cached_parameter);
@@ -5313,7 +5338,6 @@ pk_transaction_finalize (GObject *object)
 	g_free (transaction->tid);
 	g_free (transaction->sender);
 	g_free (transaction->cmdline);
-	g_ptr_array_unref (transaction->supported_content_types);
 
 	if (transaction->connection != NULL)
 		g_object_unref (transaction->connection);

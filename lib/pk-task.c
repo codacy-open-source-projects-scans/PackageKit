@@ -51,6 +51,7 @@ struct _PkTaskPrivate
 	gboolean only_trusted;
 	gboolean allow_reinstall;
 	gboolean allow_downgrade;
+	gboolean purge;
 };
 
 enum {
@@ -60,6 +61,7 @@ enum {
 	PROP_ONLY_TRUSTED,
 	PROP_ALLOW_REINSTALL,
 	PROP_ALLOW_DOWNGRADE,
+	PROP_PURGE,
 	PROP_LAST
 };
 
@@ -179,6 +181,9 @@ pk_task_do_async_action (GTask *gtask)
 	if (priv->allow_downgrade) {
 		pk_bitfield_add (transaction_flags, PK_TRANSACTION_FLAG_ENUM_ALLOW_DOWNGRADE);
 	}
+	if (priv->purge) {
+		pk_bitfield_add (transaction_flags, PK_TRANSACTION_FLAG_ENUM_PURGE);
+	}
 
 	/* do the correct action */
 	if (state->role == PK_ROLE_ENUM_INSTALL_PACKAGES) {
@@ -297,16 +302,16 @@ pk_task_do_async_action (GTask *gtask)
 					     state->progress_user_data,
 					     pk_task_ready_cb,
 					     g_steal_pointer (&gtask));
-	} else if (state->role == PK_ROLE_ENUM_DEPENDS_ON) {
-		pk_client_depends_on_async (PK_CLIENT (task),
-					    state->filters,
-					    state->package_ids,
-					    state->recursive,
-					    cancellable,
-					    state->progress_callback,
-					    state->progress_user_data,
-					    pk_task_ready_cb,
-					    g_steal_pointer (&gtask));
+	} else if (state->role == PK_ROLE_ENUM_GET_DEPENDENCIES) {
+		pk_client_get_dependencies_async (PK_CLIENT (task),
+						  state->filters,
+						  state->package_ids,
+						  state->recursive,
+						  cancellable,
+						  state->progress_callback,
+						  state->progress_user_data,
+						  pk_task_ready_cb,
+						  g_steal_pointer (&gtask));
 	} else if (state->role == PK_ROLE_ENUM_GET_PACKAGES) {
 		pk_client_get_packages_async (PK_CLIENT (task),
 					      state->filters,
@@ -315,16 +320,16 @@ pk_task_do_async_action (GTask *gtask)
 					      state->progress_user_data,
 					      pk_task_ready_cb,
 					      g_steal_pointer (&gtask));
-	} else if (state->role == PK_ROLE_ENUM_REQUIRED_BY) {
-		pk_client_required_by_async (PK_CLIENT (task),
-					     state->filters,
-					     state->package_ids,
-					     state->recursive,
-					     cancellable,
-					     state->progress_callback,
-					     state->progress_user_data,
-					     pk_task_ready_cb,
-					     g_steal_pointer (&gtask));
+	} else if (state->role == PK_ROLE_ENUM_GET_DEPENDENTS) {
+		pk_client_get_dependents_async (PK_CLIENT (task),
+						state->filters,
+						state->package_ids,
+						state->recursive,
+						cancellable,
+						state->progress_callback,
+						state->progress_user_data,
+						pk_task_ready_cb,
+						g_steal_pointer (&gtask));
 	} else if (state->role == PK_ROLE_ENUM_WHAT_PROVIDES) {
 		pk_client_what_provides_async (PK_CLIENT (task),
 					       state->filters,
@@ -1876,7 +1881,7 @@ pk_task_get_updates_async (PkTask *task,
 }
 
 /**
- * pk_task_depends_on_async: (finish-func pk_task_generic_finish):
+ * pk_task_get_dependencies_async: (finish-func pk_task_generic_finish):
  * @task: a valid #PkTask instance
  * @filters: a bitfield of filters that can be used to limit the results
  * @package_ids: (array zero-terminated=1): a null terminated array of package_id structures such as "hal;0.0.1;i386;fedora;"
@@ -1892,15 +1897,15 @@ pk_task_get_updates_async (PkTask *task,
  * Since: 0.6.5
  **/
 void
-pk_task_depends_on_async (PkTask *task,
-			  PkBitfield filters,
-			  gchar **package_ids,
-			  gboolean recursive,
-			  GCancellable *cancellable,
-			  PkProgressCallback progress_callback,
-			  gpointer progress_user_data,
-			  GAsyncReadyCallback callback_ready,
-			  gpointer user_data)
+pk_task_get_dependencies_async (PkTask *task,
+				PkBitfield filters,
+				gchar **package_ids,
+				gboolean recursive,
+				GCancellable *cancellable,
+				PkProgressCallback progress_callback,
+				gpointer progress_user_data,
+				GAsyncReadyCallback callback_ready,
+				gpointer user_data)
 {
 	PkTaskPrivate *priv = GET_PRIVATE(task);
 	PkTaskState *state;
@@ -1913,7 +1918,7 @@ pk_task_depends_on_async (PkTask *task,
 
 	/* save state */
 	state = g_slice_new0 (PkTaskState);
-	state->role = PK_ROLE_ENUM_DEPENDS_ON;
+	state->role = PK_ROLE_ENUM_GET_DEPENDENCIES;
 	state->progress_callback = progress_callback;
 	state->progress_user_data = progress_user_data;
 	state->transaction_flags = pk_bitfield_value (PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED);
@@ -1923,7 +1928,7 @@ pk_task_depends_on_async (PkTask *task,
 	state->request = pk_task_generate_request_id ();
 
 	gtask = g_task_new (task, cancellable, callback_ready, user_data);
-	g_task_set_source_tag (gtask, pk_task_depends_on_async);
+	g_task_set_source_tag (gtask, pk_task_get_dependencies_async);
 	g_debug ("adding state %p", state);
 	g_hash_table_insert (priv->gtasks, GUINT_TO_POINTER (state->request), g_object_ref (gtask));
 	g_task_set_task_data (gtask, g_steal_pointer (&state), pk_task_state_free);
@@ -1983,7 +1988,7 @@ pk_task_get_packages_async (PkTask *task,
 }
 
 /**
- * pk_task_required_by_async: (finish-func pk_task_generic_finish):
+ * pk_task_get_dependents_async: (finish-func pk_task_generic_finish):
  * @task: a valid #PkTask instance
  * @filters: a bitfield of filters that can be used to limit the results
  * @package_ids: (array zero-terminated=1): a null terminated array of package_id structures such as "hal;0.0.1;i386;fedora;"
@@ -1999,15 +2004,15 @@ pk_task_get_packages_async (PkTask *task,
  * Since: 0.6.5
  **/
 void
-pk_task_required_by_async (PkTask *task,
-			   PkBitfield filters,
-			   gchar **package_ids,
-			   gboolean recursive,
-			   GCancellable *cancellable,
-			   PkProgressCallback progress_callback,
-			   gpointer progress_user_data,
-			   GAsyncReadyCallback callback_ready,
-			   gpointer user_data)
+pk_task_get_dependents_async (PkTask *task,
+			      PkBitfield filters,
+			      gchar **package_ids,
+			      gboolean recursive,
+			      GCancellable *cancellable,
+			      PkProgressCallback progress_callback,
+			      gpointer progress_user_data,
+			      GAsyncReadyCallback callback_ready,
+			      gpointer user_data)
 {
 	PkTaskPrivate *priv = GET_PRIVATE(task);
 	PkTaskState *state;
@@ -2020,7 +2025,7 @@ pk_task_required_by_async (PkTask *task,
 
 	/* save state */
 	state = g_slice_new0 (PkTaskState);
-	state->role = PK_ROLE_ENUM_REQUIRED_BY;
+	state->role = PK_ROLE_ENUM_GET_DEPENDENTS;
 	state->progress_callback = progress_callback;
 	state->progress_user_data = progress_user_data;
 	state->transaction_flags = pk_bitfield_value (PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED);
@@ -2554,6 +2559,50 @@ pk_task_get_allow_downgrade (PkTask *task)
 }
 
 /**
+ * pk_task_set_purge:
+ * @task: a valid #PkTask instance
+ * @purge: %TRUE to also remove residual data of removed packages.
+ *
+ * If residual data (such as configuration files) of packages that get removed
+ * during the transaction shall be removed as well.
+ *
+ * Since: 2.0.0
+ **/
+void
+pk_task_set_purge (PkTask *task, gboolean purge)
+{
+	PkTaskPrivate *priv = GET_PRIVATE(task);
+
+	g_return_if_fail (PK_IS_TASK (task));
+
+	if (priv->purge == purge)
+		return;
+
+	priv->purge = purge;
+	g_object_notify_by_pspec (G_OBJECT(task), obj_properties[PROP_PURGE]);
+}
+
+/**
+ * pk_task_get_purge:
+ * @task: a valid #PkTask instance
+ *
+ * Gets if residual data of removed packages should be removed as well.
+ *
+ * Return value: %TRUE if removed packages are purged
+ *
+ * Since: 2.0.0
+ **/
+gboolean
+pk_task_get_purge (PkTask *task)
+{
+	PkTaskPrivate *priv = GET_PRIVATE(task);
+
+	g_return_val_if_fail (PK_IS_TASK (task), FALSE);
+
+	return priv->purge;
+}
+
+/**
  * pk_task_set_allow_reinstall:
  * @task: a valid #PkTask instance
  * @allow_reinstall: %TRUE to allow packages to be reinstalled.
@@ -2621,6 +2670,9 @@ pk_task_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec 
 	case PROP_ALLOW_DOWNGRADE:
 		g_value_set_boolean (value, priv->allow_downgrade);
 		break;
+	case PROP_PURGE:
+		g_value_set_boolean (value, priv->purge);
+		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 		break;
@@ -2651,6 +2703,9 @@ pk_task_set_property (GObject *object, guint prop_id, const GValue *value, GPara
 		break;
 	case PROP_ALLOW_DOWNGRADE:
 		priv->allow_downgrade = g_value_get_boolean (value);
+		break;
+	case PROP_PURGE:
+		priv->purge = g_value_get_boolean (value);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2739,6 +2794,21 @@ pk_task_class_init (PkTaskClass *klass)
 								     G_PARAM_READWRITE |
 									 G_PARAM_STATIC_STRINGS);
 
+	/**
+	 * PkTask:purge:
+	 *
+	 * %TRUE if residual data (e.g. configuration files) of packages removed
+	 * by the transaction shall be removed as well.
+	 *
+	 * Since: 2.0.0
+	 */
+	obj_properties[PROP_PURGE] = g_param_spec_boolean ("purge",
+							   NULL,
+							   NULL,
+							   FALSE,
+							   G_PARAM_READWRITE |
+							       G_PARAM_STATIC_STRINGS);
+
 	g_object_class_install_properties (object_class, PROP_LAST, obj_properties);
 }
 
@@ -2755,6 +2825,7 @@ pk_task_init (PkTask *task)
 	priv->simulate = TRUE;
 	priv->allow_reinstall = FALSE;
 	priv->allow_downgrade = FALSE;
+	priv->purge = FALSE;
 }
 
 /*

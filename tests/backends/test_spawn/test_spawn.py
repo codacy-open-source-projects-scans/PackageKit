@@ -59,16 +59,28 @@ class TestSpawnBackend(pkb.Backend):
             self.update_detail(
                 package_id,
                 updates=['foo;0.9;x86_64;installed;'],
-                cve_urls=['https://www.cve.org/CVERecord?id=CVE-2026-0001'],
+                issues=[
+                    pkb.Issue(
+                        pkb.ISSUE_KIND_CVE,
+                        'https://www.cve.org/CVERecord?id=CVE-2026-0001',
+                        'CVE-2026-0001',
+                    )
+                ],
                 restart=pkb.RESTART_SESSION,
                 update_text='Fixes things.',
                 state=pkb.UPDATE_STATE_STABLE,
-                issued='2026-01-01T00:00:00Z',
+                time_issued='2026-01-01T00:00:00Z',
             )
 
     def get_files(self, package_ids):
         for package_id in package_ids:
-            self.files(package_id, ['/usr/bin/foo', '/usr/share/doc/foo'])
+            self.files(
+                package_id,
+                {
+                    '/usr/bin/foo': pkb.FILE_KIND_REGULAR,
+                    '/usr/share/doc/foo': pkb.FILE_KIND_DIRECTORY,
+                },
+            )
 
     def get_repo_list(self, filters):
         self.repo_detail('main', 'Main repository', True)
